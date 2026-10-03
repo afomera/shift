@@ -451,6 +451,55 @@ mod tests {
     }
 
     #[test]
+    fn static_non_ribbi_italic_links_as_the_italic_of_its_weight_family() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("ThinItalic.ttf");
+        let mut font = Font::new();
+        font.metadata_mut().family_name = Some("Shift Test".to_string());
+        font.metadata_mut().style_name = Some("Thin Italic".to_string());
+
+        FontExporter::new()
+            .export(
+                &font,
+                FontExportRequest {
+                    path: output_path.clone(),
+                    format: ExportFormat::Ttf,
+                },
+            )
+            .unwrap();
+
+        let bytes = std::fs::read(&output_path).unwrap();
+        let exported = FontRef::new(&bytes).unwrap();
+        let name = |id| {
+            exported
+                .localized_strings(id)
+                .english_or_first()
+                .map(|name| name.to_string())
+        };
+        assert_eq!(
+            name(StringId::FAMILY_NAME).as_deref(),
+            Some("Shift Test Thin")
+        );
+        assert_eq!(name(StringId::SUBFAMILY_NAME).as_deref(), Some("Italic"));
+        assert_eq!(
+            name(StringId::TYPOGRAPHIC_FAMILY_NAME).as_deref(),
+            Some("Shift Test")
+        );
+        assert_eq!(
+            name(StringId::TYPOGRAPHIC_SUBFAMILY_NAME).as_deref(),
+            Some("Thin Italic")
+        );
+        let fs_selection = exported.os2().unwrap().fs_selection();
+        assert!(fs_selection.contains(SelectionFlags::ITALIC));
+        assert!(!fs_selection.contains(SelectionFlags::REGULAR));
+        assert!(exported
+            .head()
+            .unwrap()
+            .mac_style()
+            .contains(MacStyle::ITALIC));
+    }
+
+    #[test]
     fn variable_weight_axis_default_overrides_fontinfo_weight_class() {
         let mut font = sample_variable_font();
         font.fontinfo_remainder_mut().set(

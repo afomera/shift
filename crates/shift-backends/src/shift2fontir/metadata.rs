@@ -69,6 +69,13 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
         names.add_if_present(NameId::TYPOGRAPHIC_FAMILY_NAME, &metadata.family_name);
         names.add_if_present(NameId::TYPOGRAPHIC_SUBFAMILY_NAME, &metadata.style_name);
         names.add_if_present(NameId::POSTSCRIPT_NAME, &self.snapshot.postscript_name);
+        if let Some((family, subfamily)) = italic_style_link(
+            metadata.family_name.as_deref(),
+            metadata.style_name.as_deref(),
+        ) {
+            names.add(NameId::FAMILY_NAME, family);
+            names.add(NameId::SUBFAMILY_NAME, subfamily.to_string());
+        }
         let names = names.build(DEFAULT_VENDOR_ID);
         let selection_flags = style_link_flags(
             names
@@ -120,6 +127,24 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
             });
         context.static_metadata.set(static_metadata);
         Ok(())
+    }
+}
+
+/// Legacy family and subfamily (name IDs 1 and 2) for an italic outside the
+/// four linked styles, such as `Thin Italic`.
+///
+/// fontir's fallback appends any non-RIBBI style to the legacy family and sets
+/// the subfamily to `Regular`, which loses the italic: `Thin Italic` became
+/// family "Family Thin Italic", subfamily "Regular", with no italic bits. ufo2ft
+/// instead links it as the italic of the "Family Thin" legacy family. Returns
+/// `None` for `Italic` and `Bold Italic`, which fontir already links, and for
+/// styles that are not italic.
+fn italic_style_link(family: Option<&str>, style: Option<&str>) -> Option<(String, &'static str)> {
+    let family = family?;
+    let weight = style?.strip_suffix("Italic")?.trim_end();
+    match weight {
+        "" | "Regular" | "Bold" => None,
+        _ => Some((format!("{family} {weight}"), "Italic")),
     }
 }
 
