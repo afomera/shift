@@ -5,6 +5,7 @@ mod glyph_inspect;
 mod inspect;
 mod kerning;
 mod skill;
+mod proof;
 
 use std::io::{self, IsTerminal, Write};
 
@@ -42,6 +43,15 @@ fn main() -> miette::Result<()> {
         Command::Compile(args) => {
             let result = compile(args)?;
             write_stdout(&result.path.display().to_string())
+        }
+        Command::Proof(args) => {
+            let report = proof::proof(&args)?;
+            let output = if args.json {
+                serde_json::to_string_pretty(&report).into_diagnostic()?
+            } else {
+                report.render()
+            };
+            write_stdout(&output)
         }
         Command::Font { command } => match command {
             FontCommand::Create(args) => {

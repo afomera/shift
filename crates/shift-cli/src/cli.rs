@@ -6,6 +6,7 @@ use clap::{Args, ColorChoice, Parser, Subcommand, ValueHint};
 
 use crate::glyph_inspect::GlyphInspectView;
 use crate::inspect::InspectView;
+use crate::proof::ProofFormat;
 
 mod font;
 pub use font::{FontInfoArgs, SetFontArgs};
@@ -57,6 +58,9 @@ pub enum Command {
 
     /// Check font health without modifying it; exits 1 when errors are found.
     Check(CheckArgs),
+
+    /// Render text set in a font to a PNG or SVG proof image.
+    Proof(ProofArgs),
 
     /// Inspect or author font metadata and source metrics.
     Font {
@@ -399,6 +403,46 @@ pub struct CheckArgs {
     pub source: Option<String>,
 
     /// Emit the complete stable report as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ProofArgs {
+    /// Path to a .shift, UFO, Designspace, Glyphs, TTF, or OTF font source.
+    #[arg(value_hint = ValueHint::FilePath)]
+    pub path: PathBuf,
+
+    /// Path for the proof image; an existing file is replaced.
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
+    pub output: PathBuf,
+
+    /// Line of text to set; repeat for more lines. Defaults to a proof set.
+    #[arg(long, value_name = "TEXT")]
+    pub text: Vec<String>,
+
+    /// Sizes in pixels per em; each line is set at every size. Defaults to 72.
+    #[arg(long, value_name = "PX", value_delimiter = ',')]
+    pub sizes: Vec<f32>,
+
+    /// External user-space coordinate as TAG=VALUE; repeat or comma-separate values.
+    #[arg(long, value_name = "TAG=VALUE", value_delimiter = ',')]
+    pub location: Vec<String>,
+
+    /// Draw ascender, cap-height, x-height, baseline, and descender guides
+    /// behind the largest-size rows.
+    #[arg(long)]
+    pub metrics: bool,
+
+    /// Fixed image width in pixels; lines wrap at spaces to fit.
+    #[arg(long, value_name = "PX")]
+    pub width: Option<u32>,
+
+    /// Image format; inferred from the output extension when omitted.
+    #[arg(long, value_enum)]
+    pub format: Option<ProofFormat>,
+
+    /// Emit a structured report for scripts and agents.
     #[arg(long)]
     pub json: bool,
 }

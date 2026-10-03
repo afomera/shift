@@ -2,7 +2,7 @@
 
 Command-line inspection, authoring, and compilation for canonical SQLite `.shift` documents.
 
-The crate builds the `shift-cli` binary. `inspect` opens a document, summarizes the font model, and can emit stable JSON for scripts and CI. Resource commands apply semantic Shift intents through a temporary recovery overlay and save only after the complete change validates. `compile` sends the canonical Shift model directly through fontir/fontc to produce a TrueType font.
+The crate builds the `shift-cli` binary. `inspect` opens a document, summarizes the font model, and can emit stable JSON for scripts and CI. Resource commands apply semantic Shift intents through a temporary recovery overlay and save only after the complete change validates. `compile` sends the canonical Shift model directly through fontir/fontc to produce a TrueType font. `proof` compiles the same way in memory and renders text set in the font to a PNG or SVG image.
 
 ## Install
 
@@ -48,6 +48,7 @@ cargo run -p shift-cli -- glyph inspect path/to/Family.designspace Aacute \
 cargo run -p shift-cli -- compile path/to/Family.shift --output path/to/Family.ttf
 cargo run -p shift-cli -- check path/to/Family.shift
 cargo run -p shift-cli -- check path/to/Mono.shift --mono --width 600 --charset latin1 --json
+cargo run -p shift-cli -- proof path/to/Family.shift --output proof.png --metrics
 
 cargo run -p shift-cli -- font create path/to/Lab.shift
 cargo run -p shift-cli -- font create path/to/Lab.shift --from path/to/Family.glyphspackage
@@ -144,6 +145,28 @@ group. `--json` emits the complete report: `path`, `format`, `passed`, `options`
 has `severity`, `code`, `glyph` and `source` names (or `null`), `message`, and a `details`
 object whose keys are stable per code. Findings are ordered by severity, then by discovery:
 glyph rules in glyph and source order, then `--mono`, then `--charset` findings.
+
+## Proofing
+
+`proof` renders text so people and agents can look at the font:
+
+```sh
+shift-cli proof Lab.shift --output proof.png
+shift-cli proof Lab.shift --output proof.png \
+  --text "HOHOHOnnnooo" --text "Hamburgefonstiv" \
+  --sizes 16,32,72 --metrics --location wght=700
+shift-cli proof Lab.shift --output proof.svg --width 1200 --json
+```
+
+- `PATH` is a `.shift` document or any source `glyph inspect` reads; `.ttf` and `.otf` files are proofed as-is, everything else is compiled in memory first.
+- `--text` sets one line and may repeat. Without it, the proof shows `Hamburgefonstiv`, `HOHOHOnnnooo`, a pangram, and `0123456789 Il1| O0 {}[]()`.
+- `--sizes` takes pixels per em (default `72`). Every line is set at every size, line by line, with the size printed to the left of each row.
+- `--location` takes external/user-space `TAG=VALUE` coordinates; omitted axes use their defaults, and unknown axes or out-of-range values are rejected.
+- `--metrics` draws ascender (purple), cap-height (teal), x-height (green), baseline (blue), and descender (orange) guides behind the rows at the largest size.
+- `--width` fixes the image width and wraps lines at spaces; without it the image grows to fit the longest row.
+- `--format png|svg` picks the encoding; by default an `.svg` output is SVG and anything else is PNG.
+
+Text is shaped with HarfRust and drawn black on white. Characters the font does not map are shaped to `.notdef` and drawn in red (an inkless `.notdef` becomes a hollow red box). They are listed under `missing` in the human output and in `missingCharacters`, overall and per line, in the `--json` report. The report also includes the image size, the location, the font-unit metrics, the guides, and each row's text, size, pen origin `x`, `baseline`, and `width` in pixels. A font that maps no characters is an error.
 
 ## Authoring
 
@@ -428,6 +451,7 @@ cargo test -p shift-cli
 cargo run -p shift-cli -- inspect --help
 cargo run -p shift-cli -- compile --help
 cargo run -p shift-cli -- check --help
+cargo run -p shift-cli -- proof --help
 cargo run -p shift-cli -- axis add --help
 cargo run -p shift-cli -- source add --help
 cargo run -p shift-cli -- glyph add --help
