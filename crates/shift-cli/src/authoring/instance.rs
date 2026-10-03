@@ -122,7 +122,7 @@ fn default_location(font: &Font) -> ExternalLocation {
     location
 }
 
-fn resolve_instance<'a>(font: &'a Font, selector: &str) -> Result<&'a NamedInstance> {
+pub(crate) fn resolve_instance<'a>(font: &'a Font, selector: &str) -> Result<&'a NamedInstance> {
     if let Some(instance) = font
         .named_instances()
         .iter()

@@ -20,6 +20,7 @@ use serde_json::json;
 use shift_backends::font_loader::FontLoader;
 use shift_font::{Font, Source};
 
+pub use rules::incompatible_layers;
 pub use types::CheckReport;
 
 use charset::Charset;

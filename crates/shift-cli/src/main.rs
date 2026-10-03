@@ -1,11 +1,12 @@
 mod authoring;
 mod check;
 mod cli;
+mod compile;
 mod glyph_inspect;
 mod inspect;
 mod kerning;
-mod skill;
 mod proof;
+mod skill;
 
 use std::io::{self, IsTerminal, Write};
 
@@ -18,7 +19,7 @@ use authoring::{
 use check::{CheckOptions, CheckReport, EXIT_PASSED, EXIT_UNAVAILABLE};
 use clap::Parser;
 use cli::{
-    AxisCommand, CheckArgs, Cli, Command, CompileArgs, FontCommand, GlyphCommand, InstanceCommand,
+    AxisCommand, CheckArgs, Cli, Command, FontCommand, GlyphCommand, InstanceCommand,
     KerningCommand, KerningGroupCommand, LayerCommand, SkillCommand, SourceCommand,
 };
 use glyph_inspect::GlyphInspection;
@@ -26,8 +27,6 @@ use inspect::{InspectReport, RenderMode};
 use kerning::{get_kerning, kerning_groups, list_kerning};
 use miette::IntoDiagnostic;
 use serde::Serialize;
-use shift_backends::{ExportFormat, FontExportRequest, FontExportResult, FontExporter};
-use shift_store::ShiftStore;
 use skill::{SkillReport, install_skill, show_skill, skill_status};
 
 fn main() -> miette::Result<()> {
@@ -41,8 +40,12 @@ fn main() -> miette::Result<()> {
             Ok(())
         }
         Command::Compile(args) => {
-            let result = compile(args)?;
-            write_stdout(&result.path.display().to_string())
+            let paths = compile::compile(args)?;
+            let lines = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            write_stdout(&lines.join("\n"))
         }
         Command::Proof(args) => {
             let report = proof::proof(&args)?;
@@ -276,21 +279,6 @@ fn write_authoring_report(report: AuthoringReport, json: bool) -> miette::Result
     write_stdout(&output)
 }
 
-fn compile(args: CompileArgs) -> miette::Result<FontExportResult> {
-    let font = ShiftStore::open_document(&args.path)
-        .and_then(|store| store.load_font_state())
-        .into_diagnostic()?;
-    FontExporter::new()
-        .export(
-            &font,
-            FontExportRequest {
-                path: args.output,
-                format: ExportFormat::Ttf,
-            },
-        )
-        .into_diagnostic()
-}
-
 fn inspect(args: cli::InspectArgs) -> miette::Result<()> {
     let report = InspectReport::load(&args.path)?;
     let output = if args.json {
@@ -361,6 +349,7 @@ fn write_stdout(output: &str) -> miette::Result<()> {
 #[cfg(test)]
 mod tests {
     use shift_font::test_support::sample_variable_font;
+    use shift_store::ShiftStore;
 
     use super::*;
 
@@ -371,20 +360,18 @@ mod tests {
         let output_path = temp.path().join("Dogfood.ttf");
         drop(ShiftStore::create_document(&source_path, &sample_variable_font()).unwrap());
 
-        let result = compile(CompileArgs {
+        let paths = compile::compile(cli::CompileArgs {
             path: source_path,
-            output: output_path.clone(),
+            output: Some(output_path.clone()),
+            location: Vec::new(),
+            instance: None,
+            all_instances: false,
+            output_dir: None,
         })
         .unwrap();
 
-        assert_eq!(
-            result,
-            FontExportResult {
-                path: output_path,
-                format: ExportFormat::Ttf,
-            }
-        );
-        let bytes = std::fs::read(result.path).unwrap();
+        assert_eq!(paths, vec![output_path]);
+        let bytes = std::fs::read(&paths[0]).unwrap();
         assert_eq!(&bytes[..4], &[0x00, 0x01, 0x00, 0x00]);
     }
 }

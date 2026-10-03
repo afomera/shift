@@ -345,40 +345,24 @@ impl<'a> GlyphRules<'a> {
                 return;
             }
         };
-        let reference = projection.fallback();
-        let reference_source = self.font.source(&reference.source_id()).map_or_else(
-            || reference.source_id().to_string(),
-            |source| source.name().to_string(),
+        let incompatible = incompatible_layers(
+            self.font,
+            glyph,
+            projection.fallback(),
+            self.sources.iter().copied(),
         );
-
-        for index in 0..self.sources.len() {
-            let source = self.sources[index];
-            let Some(layer) = glyph.layer_for_source(source.id()) else {
-                continue;
-            };
-            if layer.id() == reference.id() {
-                continue;
-            }
-            let layer_match = reference.match_with(layer);
-            if layer_match.is_complete() {
-                continue;
-            }
-            let differences = layer_match
-                .differences()
-                .iter()
-                .map(format_difference)
-                .collect::<Vec<_>>();
+        for layer in incompatible {
             self.push(
                 Finding::new(
                     FindingCode::IncompatibleMasters,
-                    format!(
-                        "layer cannot interpolate with {reference_source}: {}",
-                        differences.join("; ")
-                    ),
-                    json!({ "referenceSource": reference_source, "differences": differences }),
+                    layer.message(),
+                    json!({
+                        "referenceSource": layer.reference_source,
+                        "differences": layer.differences,
+                    }),
                 )
                 .glyph(glyph.name())
-                .source(source.name()),
+                .source(layer.source.name()),
             );
         }
     }
@@ -393,5 +377,65 @@ pub fn unicode_labels(glyph: &Glyph) -> Vec<String> {
         .unicodes()
         .iter()
         .map(|unicode| format!("U+{unicode:04X}"))
+        .collect()
+}
+
+/// One master layer whose structure cannot interpolate with its glyph's
+/// reference layer, so variation silently excludes it.
+pub struct IncompatibleLayer<'a> {
+    pub source: &'a Source,
+    /// Name of the source owning the reference layer.
+    pub reference_source: String,
+    /// Path, node, anchor, and component differences, reference first.
+    pub differences: Vec<String>,
+}
+
+impl IncompatibleLayer<'_> {
+    /// Describes the incompatibility the way `check` reports it.
+    pub fn message(&self) -> String {
+        format!(
+            "layer cannot interpolate with {}: {}",
+            self.reference_source,
+            self.differences.join("; ")
+        )
+    }
+}
+
+/// Lists `glyph`'s layers on `sources` that cannot interpolate with `reference`.
+///
+/// `reference` is the glyph projection's structural fallback, the same layer
+/// interpolation uses for topology. Sources without a layer, and the
+/// reference layer itself, are skipped.
+pub fn incompatible_layers<'a>(
+    font: &Font,
+    glyph: &Glyph,
+    reference: &GlyphLayer,
+    sources: impl IntoIterator<Item = &'a Source>,
+) -> Vec<IncompatibleLayer<'a>> {
+    let reference_source = font.source(&reference.source_id()).map_or_else(
+        || reference.source_id().to_string(),
+        |source| source.name().to_string(),
+    );
+    sources
+        .into_iter()
+        .filter_map(|source| {
+            let layer = glyph.layer_for_source(source.id())?;
+            if layer.id() == reference.id() {
+                return None;
+            }
+            let layer_match = reference.match_with(layer);
+            if layer_match.is_complete() {
+                return None;
+            }
+            Some(IncompatibleLayer {
+                source,
+                reference_source: reference_source.clone(),
+                differences: layer_match
+                    .differences()
+                    .iter()
+                    .map(format_difference)
+                    .collect(),
+            })
+        })
         .collect()
 }

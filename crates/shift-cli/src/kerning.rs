@@ -23,7 +23,7 @@ use report::{
     AxisValue, GlyphReference, GlyphSides, KerningOrigin, KerningRule, LocationKerning,
     MasterKerning, PairRow, SourceReference,
 };
-pub(crate) use report::{GroupReport, PairReport, SideReport};
+pub(crate) use report::{GroupReport, PairReport, SideReport, format_number};
 pub use report::{KerningGroupsReport, KerningListReport, KerningResolutionReport};
 
 /// Lists authored pairs with one value per master.

@@ -367,15 +367,40 @@ pub struct MutationArgs {
     pub json: bool,
 }
 
+/// Compiles the variable font, or static fonts at single locations.
 #[derive(Debug, Parser)]
+#[command(group(ArgGroup::new("static_target").multiple(false).args(["location", "instance", "all_instances"])))]
 pub struct CompileArgs {
     /// Path to the canonical SQLite .shift document.
     #[arg(value_hint = ValueHint::FilePath)]
     pub path: PathBuf,
 
     /// Path for the compiled .ttf output.
-    #[arg(short, long, value_hint = ValueHint::FilePath)]
-    pub output: PathBuf,
+    #[arg(
+        short,
+        long,
+        value_hint = ValueHint::FilePath,
+        required_unless_present = "all_instances",
+        conflicts_with = "all_instances"
+    )]
+    pub output: Option<PathBuf>,
+
+    /// Compile a static font at this user-space location, as TAG=VALUE;
+    /// repeat or comma-separate values. Omitted axes use their defaults.
+    #[arg(long, value_name = "TAG=VALUE", value_delimiter = ',')]
+    pub location: Vec<String>,
+
+    /// Compile a static font at this named instance, by name or full id.
+    #[arg(long, value_name = "NAME|ID")]
+    pub instance: Option<String>,
+
+    /// Compile one static font per named instance into --output-dir.
+    #[arg(long, requires = "output_dir")]
+    pub all_instances: bool,
+
+    /// Directory receiving `<Family>-<Style>.ttf` files for --all-instances.
+    #[arg(long, value_hint = ValueHint::DirPath, requires = "all_instances")]
+    pub output_dir: Option<PathBuf>,
 }
 
 /// Exit status: 0 when no error findings exist, 1 when any error finding
