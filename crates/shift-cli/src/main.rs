@@ -1,4 +1,5 @@
 mod authoring;
+mod check;
 mod cli;
 mod glyph_inspect;
 mod inspect;
@@ -13,9 +14,10 @@ use authoring::{
     export_glyphs, font_info, remove_instance, remove_kerning, rename_kerning_group, set_axis,
     set_font, set_glyphs, set_instance, set_kerning, set_layer, unassign_kerning_group,
 };
+use check::{CheckOptions, CheckReport, EXIT_PASSED, EXIT_UNAVAILABLE};
 use clap::Parser;
 use cli::{
-    AxisCommand, Cli, Command, CompileArgs, FontCommand, GlyphCommand, InstanceCommand,
+    AxisCommand, CheckArgs, Cli, Command, CompileArgs, FontCommand, GlyphCommand, InstanceCommand,
     KerningCommand, KerningGroupCommand, LayerCommand, SkillCommand, SourceCommand,
 };
 use glyph_inspect::GlyphInspection;
@@ -30,6 +32,13 @@ use skill::{SkillReport, install_skill, show_skill, skill_status};
 fn main() -> miette::Result<()> {
     match Cli::parse().command {
         Command::Inspect(args) => inspect(args),
+        Command::Check(args) => {
+            let code = check(args);
+            if code != EXIT_PASSED {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Compile(args) => {
             let result = compile(args)?;
             write_stdout(&result.path.display().to_string())
@@ -186,25 +195,65 @@ fn write_authoring_result(
     match result {
         Ok(report) => write_authoring_report(report, json),
         Err(error) if json => {
-            let mut messages = vec![error.to_string()];
-            let error_ref: &(dyn std::error::Error + Send + Sync + 'static) = error.as_ref();
-            let mut source = error_ref.source();
-            while let Some(cause) = source {
-                messages.push(cause.to_string());
-                source = cause.source();
-            }
-            let output = serde_json::to_string_pretty(&serde_json::json!({
-                "valid": false,
-                "error": {
-                    "summary": messages[0],
-                    "causes": &messages[1..],
-                }
-            }))
-            .into_diagnostic()?;
-            write_stdout(&output)?;
+            write_stdout(&error_json(&error)?)?;
             Err(error)
         }
         Err(error) => Err(error),
+    }
+}
+
+fn error_json(error: &miette::Report) -> miette::Result<String> {
+    let mut messages = vec![error.to_string()];
+    let error_ref: &(dyn std::error::Error + Send + Sync + 'static) = error.as_ref();
+    let mut source = error_ref.source();
+    while let Some(cause) = source {
+        messages.push(cause.to_string());
+        source = cause.source();
+    }
+    serde_json::to_string_pretty(&serde_json::json!({
+        "valid": false,
+        "error": {
+            "summary": messages[0],
+            "causes": &messages[1..],
+        }
+    }))
+    .into_diagnostic()
+}
+
+/// Runs `check` and returns the documented process exit status.
+///
+/// A check that cannot run reports its diagnostic on stderr (and as JSON on
+/// stdout with `--json`) and returns [`EXIT_UNAVAILABLE`].
+fn check(args: CheckArgs) -> i32 {
+    let options = CheckOptions {
+        mono: args.mono,
+        width: args.width,
+        charset: args.charset,
+        source: args.source,
+    };
+    let result = CheckReport::load(&args.path, &options).and_then(|report| {
+        let output = if args.json {
+            serde_json::to_string_pretty(&report).into_diagnostic()?
+        } else {
+            report.render(render_mode())
+        };
+        write_stdout(&output)?;
+        // The caller exits the process directly, so nothing else flushes stdout.
+        io::stdout().flush().into_diagnostic()?;
+        Ok(report.exit_code())
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(error) => {
+            if args.json
+                && let Ok(output) = error_json(&error)
+            {
+                let _ = write_stdout(&output);
+            }
+            eprintln!("{error:?}");
+            EXIT_UNAVAILABLE
+        }
     }
 }
 

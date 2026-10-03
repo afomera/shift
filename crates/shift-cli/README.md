@@ -46,6 +46,8 @@ cargo run -p shift-cli -- glyph inspect path/to/Family.glyphs Aacute
 cargo run -p shift-cli -- glyph inspect path/to/Family.designspace Aacute \
   --location wght=700 --view variation --json
 cargo run -p shift-cli -- compile path/to/Family.shift --output path/to/Family.ttf
+cargo run -p shift-cli -- check path/to/Family.shift
+cargo run -p shift-cli -- check path/to/Mono.shift --mono --width 600 --charset latin1 --json
 
 cargo run -p shift-cli -- font create path/to/Lab.shift
 cargo run -p shift-cli -- font create path/to/Lab.shift --from path/to/Family.glyphspackage
@@ -85,6 +87,64 @@ coordinates and are mapped once into design space. Its views are:
 
 `--json` emits the complete `GlyphInspection` regardless of the selected human-readable view.
 
+## Health checks
+
+`check` is a read-only health report for any font source `glyph inspect` reads. It is
+designed as objective feedback for iterative, scripted, or agent-driven design:
+
+```sh
+shift-cli check PATH [--mono [--width N]] [--charset ascii|latin1|FILE] [--source S] [--json]
+```
+
+Exit status:
+
+| Status | Meaning                                                                       |
+| ------ | ----------------------------------------------------------------------------- |
+| `0`    | No error findings. Warnings and info never fail the check.                    |
+| `1`    | At least one error finding.                                                   |
+| `2`    | The check could not run: unreadable font, unknown `--source`, bad charset, or invalid arguments. |
+
+Rules apply to every master source, or only to `--source` (name or full `source_` id).
+Layer rules run only where the glyph has an authored layer; component glyphs are
+flattened before outline, bounds, and ink measurements.
+
+| Code                    | Severity | Meaning                                                                                       |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `mono-width-mismatch`   | error    | `--mono`: advance differs from the cell width (`--width`, else the most common advance; ties pick the narrowest). |
+| `mono-ink-overflow`     | warning  | `--mono`: drawn ink is wider than the glyph's advance.                                        |
+| `charset-missing-glyph` | error    | `--charset`: no glyph maps a required character.                                             |
+| `charset-missing-layer` | error    | `--charset`: the mapped glyph has no layer on the default source (or `--source`).             |
+| `empty-outline`         | error    | An encoded, non-space glyph has no contours (`noContours`) or no default-source layer (`noLayer`). |
+| `open-contour`          | error    | A contour is open and will not render as a filled shape.                                      |
+| `degenerate-contour`    | error    | A contour has fewer than three points.                                                        |
+| `non-finite-point`      | error    | A point coordinate is NaN or infinite.                                                        |
+| `invalid-advance`       | error    | Advance is non-finite, negative, or zero on a glyph that is not a mark or format character.   |
+| `incompatible-masters`  | error    | A master layer cannot interpolate with the glyph's reference layer (same comparison as `glyph inspect --view sources`). |
+| `unresolved-glyph`      | error    | The glyph cannot be resolved, for example because a component base is missing.               |
+| `outline-out-of-bounds` | warning  | Ink extends more than 20% of the em above the ascender or below the descender.                |
+| `contour-direction`     | warning  | A contour winds against its nesting. Shift sources use PostScript direction: outer contours counter-clockwise, counters clockwise (the TrueType compiler reverses them). |
+| `missing-master-layer`  | info     | The glyph has layers on other masters but not this one, so it is interpolated here.          |
+
+Glyph roles come from the Unicode general category of the glyph's code points. Unencoded
+glyphs use their name: `uniXXXX`/`uXXXXX` names are classified like that code point, and
+names whose base (before the first `.`) ends in `comb` are marks. Nonspacing and enclosing
+marks (`Mn`, `Me`) are excluded from `--mono` and may be zero-width; control and format
+characters (`Cc`, `Cf`) and `.null`/`NULL` may be zero-width; separators, controls, and
+format characters may have empty outlines.
+
+Built-in charsets are `ascii` (U+0020–U+007E) and `latin1` (ascii plus U+00A0–U+00FF).
+A charset file is UTF-8 text: each line contributes its non-whitespace characters, except
+blank lines, `#` comments, and lines starting with `U+` that name one scalar (`U+0041`) or
+an inclusive range (`U+0041..U+005A`). Use `U+0020` for space and `U+0023` for `#`.
+
+Human output prints a summary and findings grouped by severity and code, truncated per
+group. `--json` emits the complete report: `path`, `format`, `passed`, `options`,
+`counts` (`error`, `warning`, `info`, `total`), checked `sources`, `glyphCount`, `mono`
+(per-source expected width and width histogram), `charset`, and `findings`. Each finding
+has `severity`, `code`, `glyph` and `source` names (or `null`), `message`, and a `details`
+object whose keys are stable per code. Findings are ordered by severity, then by discovery:
+glyph rules in glyph and source order, then `--mono`, then `--charset` findings.
+
 ## Authoring
 
 Authoring commands operate on Shift domain objects rather than persistence rows. The resource surface creates font topology, glyph identity, and sparse authored layers:
@@ -115,8 +175,8 @@ correctly scaled test documents from real fonts.
       "closed": true,
       "points": [
         { "x": 0, "y": 0 },
-        { "x": 300, "y": 700, "pointType": "onCurve" },
-        { "x": 600, "y": 0 }
+        { "x": 600, "y": 0 },
+        { "x": 300, "y": 700, "pointType": "onCurve" }
       ]
     }
   ],
@@ -124,7 +184,7 @@ correctly scaled test documents from real fonts.
 }
 ```
 
-Identity is not part of the layer payload. `pointType` defaults to `onCurve`; accepted values are `onCurve`, `offCurve`, and `qCurve`. A layer payload authors contours, anchors, and components. `layer copy` preserves complete authored layer content, including components, while minting fresh internal identities.
+Identity is not part of the layer payload. Draw outer contours counter-clockwise and counters clockwise; `check` warns about the opposite direction. `pointType` defaults to `onCurve`; accepted values are `onCurve`, `offCurve`, and `qCurve`. A layer payload authors contours, anchors, and components. `layer copy` preserves complete authored layer content, including components, while minting fresh internal identities.
 
 ### Replacing drawings
 
@@ -367,6 +427,7 @@ After pulling or merging `main`, rerun the same `cargo install` command to updat
 cargo test -p shift-cli
 cargo run -p shift-cli -- inspect --help
 cargo run -p shift-cli -- compile --help
+cargo run -p shift-cli -- check --help
 cargo run -p shift-cli -- axis add --help
 cargo run -p shift-cli -- source add --help
 cargo run -p shift-cli -- glyph add --help

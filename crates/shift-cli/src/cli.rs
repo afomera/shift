@@ -55,6 +55,9 @@ pub enum Command {
     /// Compile a SQLite .shift document to a TrueType font.
     Compile(CompileArgs),
 
+    /// Check font health without modifying it; exits 1 when errors are found.
+    Check(CheckArgs),
+
     /// Inspect or author font metadata and source metrics.
     Font {
         #[command(subcommand)]
@@ -369,6 +372,35 @@ pub struct CompileArgs {
     /// Path for the compiled .ttf output.
     #[arg(short, long, value_hint = ValueHint::FilePath)]
     pub output: PathBuf,
+}
+
+/// Exit status: 0 when no error findings exist, 1 when any error finding
+/// exists (warnings and info never fail), 2 when the check cannot run.
+#[derive(Debug, Parser)]
+pub struct CheckArgs {
+    /// Path to a .shift, UFO, Designspace, Glyphs, TTF, or OTF font source.
+    #[arg(value_hint = ValueHint::FilePath)]
+    pub path: PathBuf,
+
+    /// Require every non-mark glyph to share one advance width per source.
+    #[arg(long)]
+    pub mono: bool,
+
+    /// Expected monospace advance in font units; defaults to the most common advance.
+    #[arg(long, value_name = "UNITS", requires = "mono")]
+    pub width: Option<f64>,
+
+    /// Required characters: ascii, latin1, or a file of characters and U+XXXX lines.
+    #[arg(long, value_name = "ascii|latin1|FILE")]
+    pub charset: Option<String>,
+
+    /// Check only this master source, by name or full stable source id.
+    #[arg(long)]
+    pub source: Option<String>,
+
+    /// Emit the complete stable report as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Parser)]

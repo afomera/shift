@@ -570,7 +570,9 @@ fn bounds_for_contours(contours: &[ResolvedContour]) -> Option<Bounds> {
     Some(bounds)
 }
 
-fn format_difference(difference: &LayerDifference) -> String {
+/// Describes one structural layer difference in path, node, anchor, and
+/// component terms, with the reference value before the source value.
+pub(crate) fn format_difference(difference: &LayerDifference) -> String {
     match difference {
         LayerDifference::ContourCount { reference, source } => {
             format!("path count: reference {reference}, source {source}")

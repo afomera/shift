@@ -2310,6 +2310,7 @@ dependencies = [
  "anstyle",
  "clap",
  "comfy-table",
+ "icu_properties",
  "miette",
  "rusqlite",
  "serde",
