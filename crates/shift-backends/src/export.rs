@@ -230,6 +230,10 @@ mod tests {
     use super::*;
     use shift_font::test_support::sample_variable_font;
     use shift_font::{Axis, AxisMapping, AxisMappingPoint, AxisRole, Font, Location};
+    use skrifa::raw::tables::head::MacStyle;
+    use skrifa::raw::tables::os2::SelectionFlags;
+    use skrifa::raw::TableProvider;
+    use skrifa::string::StringId;
     use skrifa::{FontRef, MetadataProvider};
 
     #[test]
@@ -398,5 +402,71 @@ mod tests {
             ExportError::UnsupportedCrossAxisMappings { mapping_count: 1 }
         ));
         assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn static_fonts_honor_fontinfo_weight_class_postscript_name_and_style_linking() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("Static.ttf");
+        let mut font = Font::new();
+        font.metadata_mut().family_name = Some("Shift Test".to_string());
+        font.metadata_mut().style_name = Some("Bold".to_string());
+        font.fontinfo_remainder_mut().set(
+            "openTypeOS2WeightClass".to_string(),
+            shift_font::LibValue::Integer(700),
+        );
+        font.fontinfo_remainder_mut().set(
+            "postscriptFontName".to_string(),
+            shift_font::LibValue::String("ShiftTest-Heavy".to_string()),
+        );
+
+        FontExporter::new()
+            .export(
+                &font,
+                FontExportRequest {
+                    path: output_path.clone(),
+                    format: ExportFormat::Ttf,
+                },
+            )
+            .unwrap();
+
+        let bytes = std::fs::read(&output_path).unwrap();
+        let exported = FontRef::new(&bytes).unwrap();
+        let os2 = exported.os2().unwrap();
+        assert_eq!(os2.us_weight_class(), 700);
+        assert!(os2.fs_selection().contains(SelectionFlags::BOLD));
+        assert!(exported
+            .head()
+            .unwrap()
+            .mac_style()
+            .contains(MacStyle::BOLD));
+        assert_eq!(
+            exported
+                .localized_strings(StringId::POSTSCRIPT_NAME)
+                .english_or_first()
+                .map(|name| name.to_string())
+                .as_deref(),
+            Some("ShiftTest-Heavy")
+        );
+    }
+
+    #[test]
+    fn variable_weight_axis_default_overrides_fontinfo_weight_class() {
+        let mut font = sample_variable_font();
+        font.fontinfo_remainder_mut().set(
+            "openTypeOS2WeightClass".to_string(),
+            shift_font::LibValue::Integer(900),
+        );
+        let wght = font
+            .axes()
+            .iter()
+            .find(|axis| axis.tag() == "wght")
+            .expect("the sample font has a weight axis")
+            .default();
+
+        let bytes = FontExporter::new().compile_ttf(&font).unwrap();
+
+        let exported = FontRef::new(&bytes).unwrap();
+        assert_eq!(exported.os2().unwrap().us_weight_class(), wght as u16);
     }
 }

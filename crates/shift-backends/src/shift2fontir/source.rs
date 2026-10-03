@@ -7,8 +7,8 @@ use fontir::error::Error;
 use fontir::orchestration::{Flags, IrWork};
 use fontir::source::Source;
 use shift_font::{
-    Axis, FeatureData, FontMetadata, FontMetrics, Glyph, Kerning, MetricDefinition, NamedInstance,
-    Source as ShiftSource, SourceId,
+    Axis, FeatureData, FontMetadata, FontMetrics, Glyph, Kerning, LibData, LibValue,
+    MetricDefinition, NamedInstance, Source as ShiftSource, SourceId,
 };
 
 use crate::glyph_category::{gdef_classes, GlyphCategories};
@@ -79,6 +79,10 @@ pub(super) struct ShiftSnapshot {
     pub gdef_classes: BTreeMap<String, GlyphClassDef>,
     /// Glyphs whose advance compiles to zero, as Glyphs does for nonspacing marks.
     pub nonspacing_marks: HashSet<String>,
+    /// UFO `openTypeOS2WeightClass`; a variable `wght` axis default overrides it.
+    pub us_weight_class: Option<u16>,
+    /// UFO `postscriptFontName`, emitted as name ID 6 when present.
+    pub postscript_name: Option<String>,
 }
 
 impl ShiftIrSource {
@@ -134,6 +138,11 @@ impl ShiftIrSource {
                         .filter(|glyph| categories.resolve(glyph).is_nonspacing_mark())
                         .map(|glyph| glyph.name().to_string())
                         .collect()
+                },
+                us_weight_class: weight_class(font.fontinfo_remainder()),
+                postscript_name: match font.fontinfo_remainder().get("postscriptFontName") {
+                    Some(LibValue::String(name)) if !name.trim().is_empty() => Some(name.clone()),
+                    _ => None,
                 },
             }),
         })
@@ -197,4 +206,17 @@ impl Source for ShiftIrSource {
     fn compilation_flags(&self) -> Flags {
         Flags::empty()
     }
+}
+
+/// Reads a UFO `openTypeOS2WeightClass` in the OpenType range 1..=1000.
+fn weight_class(fontinfo: &LibData) -> Option<u16> {
+    let value = match fontinfo.get("openTypeOS2WeightClass")? {
+        LibValue::Integer(value) => *value as f64,
+        LibValue::UnsignedInteger(value) => *value as f64,
+        LibValue::Float(value) => *value,
+        _ => return None,
+    };
+    (1.0..=1000.0)
+        .contains(&value)
+        .then(|| value.round() as u16)
 }

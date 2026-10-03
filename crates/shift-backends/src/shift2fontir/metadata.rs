@@ -11,6 +11,7 @@ use fontir::ir::{
 };
 use fontir::orchestration::{Context, WorkId};
 use shift_font::{MetricKind, Source};
+use write_fonts::tables::os2::SelectionFlags;
 use write_fonts::types::NameId;
 
 use super::axes::{normalized_source_location, to_ir_named_instances};
@@ -67,6 +68,14 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
         names.add_if_present(NameId::LICENSE_URL, &metadata.license_url);
         names.add_if_present(NameId::TYPOGRAPHIC_FAMILY_NAME, &metadata.family_name);
         names.add_if_present(NameId::TYPOGRAPHIC_SUBFAMILY_NAME, &metadata.style_name);
+        names.add_if_present(NameId::POSTSCRIPT_NAME, &self.snapshot.postscript_name);
+        let names = names.build(DEFAULT_VENDOR_ID);
+        let selection_flags = style_link_flags(
+            names
+                .iter()
+                .find(|(key, _)| key.name_id == NameId::SUBFAMILY_NAME)
+                .map(|(_, name)| name.as_str()),
+        );
 
         let ir_axes = Axes::from(self.snapshot.ir_axes.clone());
         let global_locations = self.global_locations(&ir_axes)?;
@@ -75,7 +84,7 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
                 .map_err(|error| Error::InvalidEntry("Shift named instance", error.to_string()))?;
         let mut static_metadata = StaticMetadata::new(
             self.snapshot.metrics.units_per_em as u16,
-            names.build(DEFAULT_VENDOR_ID),
+            names,
             self.snapshot.ir_axes.clone(),
             named_instances,
             global_locations,
@@ -86,6 +95,8 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
         )?;
         static_metadata.misc.version_major = version_major;
         static_metadata.misc.version_minor = version_minor;
+        static_metadata.misc.us_weight_class = self.snapshot.us_weight_class;
+        static_metadata.misc.selection_flags |= selection_flags;
 
         let mut glyph_order = GlyphOrder::new();
         for glyph in &self.snapshot.glyphs {
@@ -109,6 +120,21 @@ impl Work<Context, WorkId, Error> for StaticMetadataWork {
             });
         context.static_metadata.set(static_metadata);
         Ok(())
+    }
+}
+
+/// Derives `OS/2.fsSelection` style-linking bits from the legacy subfamily name.
+///
+/// fontir reduces the subfamily (name ID 2) to `Regular`, `Bold`, `Italic`,
+/// or `Bold Italic`, the four styles linked within one legacy family, so the
+/// bits follow ufo2ft's `styleMapStyleName` rule. `head.macStyle` mirrors them.
+fn style_link_flags(subfamily: Option<&str>) -> SelectionFlags {
+    match subfamily {
+        Some("Regular") => SelectionFlags::REGULAR,
+        Some("Bold") => SelectionFlags::BOLD,
+        Some("Italic") => SelectionFlags::ITALIC,
+        Some("Bold Italic") => SelectionFlags::BOLD | SelectionFlags::ITALIC,
+        _ => SelectionFlags::empty(),
     }
 }
 
