@@ -13,6 +13,8 @@ use shift_backends::FontExporter;
 use shift_backends::font_loader::FontLoader;
 use skrifa::instance::{Location, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::raw::TableProvider;
+use skrifa::raw::tables::os2::SelectionFlags;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 /// Width of the placeholder box drawn for a missing glyph with no ink, in ems.
@@ -154,15 +156,42 @@ impl<'a> ProofFont<'a> {
             .collect()
     }
 
+    /// Returns the vertical metrics the designer authored, at the proof
+    /// location.
+    ///
+    /// Ascender and descender come from `OS/2` typo metrics rather than
+    /// `hhea`: fontc pads `hhea.ascender` to at least 1.2 em of line height,
+    /// so it does not match the source's ascender. Any variation delta skrifa
+    /// applied to the `hhea` value is carried over to the typo value.
     pub fn metrics(&self) -> ProofMetrics {
         let metrics = self.font.metrics(Size::unscaled(), &self.location);
+        let (ascender, descender) = self.typo_vertical_metrics(metrics.ascent, metrics.descent);
         ProofMetrics {
             units_per_em: metrics.units_per_em,
-            ascender: metrics.ascent,
-            descender: metrics.descent,
+            ascender,
+            descender,
             x_height: metrics.x_height,
             cap_height: metrics.cap_height,
         }
+    }
+
+    /// Rebases skrifa's `ascent`/`descent` from `hhea` onto `OS/2` typo
+    /// values; returns them unchanged when skrifa already used typo metrics
+    /// or either table is missing.
+    fn typo_vertical_metrics(&self, ascent: f32, descent: f32) -> (f32, f32) {
+        let (Ok(os2), Ok(hhea)) = (self.font.os2(), self.font.hhea()) else {
+            return (ascent, descent);
+        };
+        if os2
+            .fs_selection()
+            .contains(SelectionFlags::USE_TYPO_METRICS)
+        {
+            return (ascent, descent);
+        }
+
+        let ascender_shift = f32::from(hhea.ascender().to_i16() - os2.s_typo_ascender());
+        let descender_shift = f32::from(hhea.descender().to_i16() - os2.s_typo_descender());
+        (ascent - ascender_shift, descent - descender_shift)
     }
 
     /// Returns characters of `text` the character map does not cover, in

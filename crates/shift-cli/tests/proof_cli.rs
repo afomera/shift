@@ -352,3 +352,36 @@ fn refuses_to_proof_a_font_without_characters() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("maps no characters"));
     assert!(!image.exists());
 }
+
+#[test]
+fn guides_use_the_authored_ascender_rather_than_padded_line_height() {
+    let temp = tempfile::tempdir().unwrap();
+    let font = temp.path().join("Box.shift");
+    let image = temp.path().join("proof.png");
+    create_box_font(&font);
+    // fontc pads hhea.ascender to 800 + (1200 - 200 - 800) = 1000 here.
+    let set = shift(&[
+        "font",
+        "set",
+        font.to_str().unwrap(),
+        "--ascender",
+        "800",
+        "--descender",
+        "-200",
+        "--line-gap",
+        "0",
+    ]);
+    assert!(set.status.success(), "{:?}", set.stderr);
+
+    let report = proof_json(&[
+        font.to_str().unwrap(),
+        "--output",
+        image.to_str().unwrap(),
+        "--text",
+        "HI",
+        "--metrics",
+    ]);
+
+    assert_eq!(report["metrics"]["ascender"], 800.0);
+    assert_eq!(report["metrics"]["descender"], -200.0);
+}
