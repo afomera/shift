@@ -2,7 +2,7 @@
 
 Command-line inspection, authoring, and compilation for canonical SQLite `.shift` documents.
 
-The crate builds the `shift-cli` binary. `inspect` opens a document, summarizes the font model, and can emit stable JSON for scripts and CI. Resource commands apply semantic Shift intents through a temporary recovery overlay and save only after the complete change validates. `compile` sends the canonical Shift model directly through fontir/fontc to produce a TrueType font. `proof` compiles the same way in memory and renders text set in the font to a PNG or SVG image.
+The crate builds the `shift-cli` binary. `inspect` opens a document, summarizes the font model, and can emit stable JSON for scripts and CI. Resource commands apply semantic Shift intents through a temporary recovery overlay and save only after the complete change validates. `compile` sends the canonical Shift model directly through fontir/fontc to produce a TrueType font. `proof` compiles the same way in memory and renders text, or syntax-highlighted code, set in the font to a PNG or SVG image.
 
 ## Install
 
@@ -99,32 +99,32 @@ shift-cli check PATH [--mono [--width N]] [--charset ascii|latin1|FILE] [--sourc
 
 Exit status:
 
-| Status | Meaning                                                                       |
-| ------ | ----------------------------------------------------------------------------- |
-| `0`    | No error findings. Warnings and info never fail the check.                    |
-| `1`    | At least one error finding.                                                   |
+| Status | Meaning                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `0`    | No error findings. Warnings and info never fail the check.                                       |
+| `1`    | At least one error finding.                                                                      |
 | `2`    | The check could not run: unreadable font, unknown `--source`, bad charset, or invalid arguments. |
 
 Rules apply to every master source, or only to `--source` (name or full `source_` id).
 Layer rules run only where the glyph has an authored layer; component glyphs are
 flattened before outline, bounds, and ink measurements.
 
-| Code                    | Severity | Meaning                                                                                       |
-| ----------------------- | -------- | --------------------------------------------------------------------------------------------- |
-| `mono-width-mismatch`   | error    | `--mono`: advance differs from the cell width (`--width`, else the most common advance; ties pick the narrowest). |
-| `mono-ink-overflow`     | warning  | `--mono`: drawn ink is wider than the glyph's advance.                                        |
-| `charset-missing-glyph` | error    | `--charset`: no glyph maps a required character.                                             |
-| `charset-missing-layer` | error    | `--charset`: the mapped glyph has no layer on the default source (or `--source`).             |
-| `empty-outline`         | error    | An encoded, non-space glyph has no contours (`noContours`) or no default-source layer (`noLayer`). |
-| `open-contour`          | error    | A contour is open and will not render as a filled shape.                                      |
-| `degenerate-contour`    | error    | A contour has fewer than three points.                                                        |
-| `non-finite-point`      | error    | A point coordinate is NaN or infinite.                                                        |
-| `invalid-advance`       | error    | Advance is non-finite, negative, or zero on a glyph that is not a mark or format character.   |
-| `incompatible-masters`  | error    | A master layer cannot interpolate with the glyph's reference layer (same comparison as `glyph inspect --view sources`). |
-| `unresolved-glyph`      | error    | The glyph cannot be resolved, for example because a component base is missing.               |
-| `outline-out-of-bounds` | warning  | Ink extends more than 20% of the em above the ascender or below the descender.                |
+| Code                    | Severity | Meaning                                                                                                                                                                  |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mono-width-mismatch`   | error    | `--mono`: advance differs from the cell width (`--width`, else the most common advance; ties pick the narrowest).                                                        |
+| `mono-ink-overflow`     | warning  | `--mono`: drawn ink is wider than the glyph's advance.                                                                                                                   |
+| `charset-missing-glyph` | error    | `--charset`: no glyph maps a required character.                                                                                                                         |
+| `charset-missing-layer` | error    | `--charset`: the mapped glyph has no layer on the default source (or `--source`).                                                                                        |
+| `empty-outline`         | error    | An encoded, non-space glyph has no contours (`noContours`) or no default-source layer (`noLayer`).                                                                       |
+| `open-contour`          | error    | A contour is open and will not render as a filled shape.                                                                                                                 |
+| `degenerate-contour`    | error    | A contour has fewer than three points.                                                                                                                                   |
+| `non-finite-point`      | error    | A point coordinate is NaN or infinite.                                                                                                                                   |
+| `invalid-advance`       | error    | Advance is non-finite, negative, or zero on a glyph that is not a mark or format character.                                                                              |
+| `incompatible-masters`  | error    | A master layer cannot interpolate with the glyph's reference layer (same comparison as `glyph inspect --view sources`).                                                  |
+| `unresolved-glyph`      | error    | The glyph cannot be resolved, for example because a component base is missing.                                                                                           |
+| `outline-out-of-bounds` | warning  | Ink extends more than 20% of the em above the ascender or below the descender.                                                                                           |
 | `contour-direction`     | warning  | A contour winds against its nesting. Shift sources use PostScript direction: outer contours counter-clockwise, counters clockwise (the TrueType compiler reverses them). |
-| `missing-master-layer`  | info     | The glyph has layers on other masters but not this one, so it is interpolated here.          |
+| `missing-master-layer`  | info     | The glyph has layers on other masters but not this one, so it is interpolated here.                                                                                      |
 
 Glyph roles come from the Unicode general category of the glyph's code points. Unencoded
 glyphs use their name: `uniXXXX`/`uXXXXX` names are classified like that code point, and
@@ -163,10 +163,38 @@ shift-cli proof Lab.shift --output proof.svg --width 1200 --json
 - `--sizes` takes pixels per em (default `72`). Every line is set at every size, line by line, with the size printed to the left of each row.
 - `--location` takes external/user-space `TAG=VALUE` coordinates; omitted axes use their defaults, and unknown axes or out-of-range values are rejected.
 - `--metrics` draws ascender (purple), cap-height (teal), x-height (green), baseline (blue), and descender (orange) guides behind the rows at the largest size.
-- `--width` fixes the image width and wraps lines at spaces; without it the image grows to fit the longest row.
+- `--width` fixes the image width and wraps text lines at spaces; without it the image grows to fit the longest row.
 - `--format png|svg` picks the encoding; by default an `.svg` output is SVG and anything else is PNG.
 
-Text is shaped with HarfRust and drawn black on white. Characters the font does not map are shaped to `.notdef` and drawn in red (an inkless `.notdef` becomes a hollow red box). They are listed under `missing` in the human output and in `missingCharacters`, overall and per line, in the `--json` report. The report also includes the image size, the location, the font-unit metrics, the guides, and each row's text, size, pen origin `x`, `baseline`, and `width` in pixels. A font that maps no characters is an error.
+- `--background` and `--foreground` take `#rrggbb` (or `#rgb`) and recolor any proof, for example a dark-mode text proof. `--theme` also works on text proofs and supplies both colors.
+
+Text is shaped with HarfRust and drawn black on white unless recolored. Characters the font does not map are shaped to `.notdef` and drawn in red (an inkless `.notdef` becomes a hollow red box). They are listed under `missing` in the human output and in `missingCharacters`, overall and per line, in the `--json` report. The report also includes the image size, the location, the font-unit metrics, the guides, and each row's text, size, pen origin `x`, `baseline`, and `width` in pixels. A font that maps no characters is an error.
+
+### Code proofs
+
+Coding fonts are judged as colored code on an editor background, so `proof` can also set syntax-highlighted source:
+
+```sh
+shift-cli proof Mono.shift -o code.png --code-sample rust --line-numbers
+shift-cli proof Mono.shift -o code.png --code src/main.go --theme InspiredGitHub
+cat script | shift-cli proof Mono.shift -o code.png --code - --lang sh --tab-width 8
+shift-cli proof Mono.shift -o code.svg --spans spans.json --json
+```
+
+- Exactly one of `--code FILE|-`, `--code-sample LANG`, or `--spans FILE|-` selects code mode; each conflicts with `--text`.
+- `--code-sample` sets a built-in program of about 30 lines (`rust`, `typescript`, `python`, `go`, `ruby`, `shell`) that exercises `0O o`, `1lI|`, brackets, operators such as `=> -> != == === <= >= :: ...`, comment markers, all three quote styles, `_ -`, `@$%^&*~`, numbers like `0x1F 1_000 3.14e-2`, a long line, and indentation.
+- `--lang NAME|EXT` picks the grammar for `--code`. Without it the grammar comes from the file extension, then the first line (a shebang, for example), then plain text. An unknown name lists every bundled language. TypeScript has no bundled grammar and is highlighted with JavaScript's.
+- `--theme NAME` picks a bundled syntect theme: `base16-ocean.dark` (default), `base16-eighties.dark`, `base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`. An unknown name lists them. The theme supplies the background, the default foreground, and every token color; `--background` and `--foreground` override the first two (the foreground override recolors tokens drawn in the theme's own foreground). Bold, italic, and underline are not drawn because the proof has one style; `stylesIgnored` in the report says when the theme asked for them.
+- `--spans` reads `{ "background": "#1e1e1e", "foreground": "#d4d4d4", "lines": [[{"text": "fn ", "color": "#c678dd"}, {"text": "main"}]] }`, one array per line; a piece without `color` uses the foreground, and missing document colors fall back to `--theme`. Use it to color anything exactly without a grammar.
+- Whitespace is kept exactly and tabs expand to the next multiple of `--tab-width` columns (default `4`) before shaping, so monospace columns line up. Columns count Unicode scalar values.
+- Code is set at one size: a single `--sizes` value (default `20`); more than one is an error. Rows are 1.5 em apart (or the font's ascender-to-descender span when taller) with 24px of padding.
+- Code never wraps. With `--width`, longer lines run off the right edge and their rows report `clipped: true`.
+- `--line-numbers` adds a right-aligned gutter in the foreground faded toward the background. Numbers use the proofed font when it maps `0`-`9`, otherwise the built-in bitmap digits.
+- `--metrics` draws the guides faintly (35% opacity) behind the first line only.
+- Each line is shaped whole, so kerning, ligatures, and contextual alternates work across token boundaries; each glyph takes the color of the token containing its cluster's first character.
+- Missing characters are drawn as hollow magenta boxes spanning the glyph's advance from descender to ascender, so they never read as a token color, and are reported as in text mode.
+
+The `--json` report adds `mode` (`text`, `code`, or `spans`), `language`, `theme`, `background`, `foreground`, `lineCount`, `tabWidth`, `lineNumbers`, and `stylesIgnored`; each row also has `clipped`.
 
 ## Authoring
 

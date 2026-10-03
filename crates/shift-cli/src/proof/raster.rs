@@ -1,20 +1,14 @@
 //! Rasterizes a laid-out proof page to PNG with tiny-skia.
 
 use miette::{Result, miette};
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
-use super::font::Segment;
+use super::font::{PlacedGlyph, Segment};
 use super::label::{LABEL_ADVANCE, LABEL_HEIGHT, LABEL_PIXEL, cells};
-use super::layout::{MARGIN, Page, Row, size_label};
+use super::layout::{Label, Page, Row};
+use super::theme::Rgb;
 
-/// Fill for glyphs the font draws.
-const INK: [u8; 3] = [0, 0, 0];
-/// Fill for `.notdef` glyphs shaped in place of missing characters.
-pub const MISSING: [u8; 3] = [220, 38, 38];
-/// Fill for row size labels.
-pub const LABEL: [u8; 3] = [140, 140, 140];
-
-/// Draws `page` black on white and returns encoded PNG bytes.
+/// Draws `page` in its palette and returns encoded PNG bytes.
 ///
 /// # Errors
 ///
@@ -28,24 +22,24 @@ pub fn render_png(page: &Page) -> Result<Vec<u8>> {
             page.height
         )
     })?;
-    pixmap.fill(Color::WHITE);
+    let [red, green, blue] = page.palette.background.0;
+    pixmap.fill(tiny_skia::Color::from_rgba8(red, green, blue, 255));
 
+    let guide_alpha = (page.palette.guide_opacity * 255.0).round() as u8;
     for guide in &page.guides {
         let y = guide.y.round();
         if let Some(rect) = Rect::from_xywh(guide.x0, y, guide.x1 - guide.x0, 1.0) {
-            pixmap.fill_rect(
-                rect,
-                &paint(guide.guide.color()),
-                Transform::identity(),
-                None,
-            );
+            let paint = paint(Rgb(guide.guide.color()), guide_alpha);
+            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
         }
     }
 
+    let missing = page.palette.missing.color();
     for row in &page.rows {
-        draw_label(&mut pixmap, row);
-        fill_glyphs(&mut pixmap, row, false, INK);
-        fill_glyphs(&mut pixmap, row, true, MISSING);
+        draw_label(&mut pixmap, row, page.palette.label);
+        for (glyphs, color) in row.color_runs(missing) {
+            fill_glyphs(&mut pixmap, row, row.origin_x, glyphs, color);
+        }
     }
 
     pixmap
@@ -53,22 +47,17 @@ pub fn render_png(page: &Page) -> Result<Vec<u8>> {
         .map_err(|error| miette!("failed to encode the proof PNG: {error}"))
 }
 
-fn paint(color: [u8; 3]) -> Paint<'static> {
+fn paint(color: Rgb, alpha: u8) -> Paint<'static> {
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color[0], color[1], color[2], 255);
+    paint.set_color_rgba8(color.0[0], color.0[1], color.0[2], alpha);
     paint.anti_alias = true;
     paint
 }
 
-fn fill_glyphs(pixmap: &mut Pixmap, row: &Row, missing: bool, color: [u8; 3]) {
+fn fill_glyphs(pixmap: &mut Pixmap, row: &Row, origin_x: f32, glyphs: &[PlacedGlyph], color: Rgb) {
     let mut builder = PathBuilder::new();
-    let point = |x: f32, y: f32| (row.origin_x + x * row.scale, row.baseline - y * row.scale);
-    let glyphs = row
-        .run
-        .glyphs
-        .iter()
-        .filter(|glyph| glyph.missing == missing);
-    for segment in glyphs.flat_map(|glyph| &glyph.segments) {
+    let point = |x: f32, y: f32| (origin_x + x * row.scale, row.baseline - y * row.scale);
+    for segment in glyphs.iter().flat_map(|glyph| &glyph.segments) {
         match *segment {
             Segment::Move(x, y) => {
                 let (x, y) = point(x, y);
@@ -96,7 +85,7 @@ fn fill_glyphs(pixmap: &mut Pixmap, row: &Row, missing: bool, color: [u8; 3]) {
     if let Some(path) = builder.finish() {
         pixmap.fill_path(
             &path,
-            &paint(color),
+            &paint(color, 255),
             FillRule::Winding,
             Transform::identity(),
             None,
@@ -104,20 +93,26 @@ fn fill_glyphs(pixmap: &mut Pixmap, row: &Row, missing: bool, color: [u8; 3]) {
     }
 }
 
-fn draw_label(pixmap: &mut Pixmap, row: &Row) {
-    let paint = paint(LABEL);
-    let top = (row.baseline - LABEL_HEIGHT).round();
-    for (index, character) in size_label(row.size).chars().enumerate() {
-        let left = MARGIN + index as f32 * LABEL_ADVANCE;
-        for (column, cell_row) in cells(character) {
-            let rect = Rect::from_xywh(
-                left + f32::from(column) * LABEL_PIXEL,
-                top + f32::from(cell_row) * LABEL_PIXEL,
-                LABEL_PIXEL,
-                LABEL_PIXEL,
-            );
-            if let Some(rect) = rect {
-                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+fn draw_label(pixmap: &mut Pixmap, row: &Row, color: Rgb) {
+    match &row.label {
+        None => {}
+        Some(Label::Font { run, x }) => fill_glyphs(pixmap, row, *x, &run.glyphs, color),
+        Some(Label::Bitmap { text, x }) => {
+            let paint = paint(color, 255);
+            let top = (row.baseline - LABEL_HEIGHT).round();
+            for (index, character) in text.chars().enumerate() {
+                let left = x + index as f32 * LABEL_ADVANCE;
+                for (column, cell_row) in cells(character) {
+                    let rect = Rect::from_xywh(
+                        left + f32::from(column) * LABEL_PIXEL,
+                        top + f32::from(cell_row) * LABEL_PIXEL,
+                        LABEL_PIXEL,
+                        LABEL_PIXEL,
+                    );
+                    if let Some(rect) = rect {
+                        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+                    }
+                }
             }
         }
     }

@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use anstyle::{AnsiColor, Effects};
 use clap::builder::styling::Styles;
-use clap::{Args, ColorChoice, Parser, Subcommand, ValueHint};
+use clap::{ArgGroup, Args, ColorChoice, Parser, Subcommand, ValueHint};
 
 use crate::glyph_inspect::GlyphInspectView;
 use crate::inspect::InspectView;
-use crate::proof::ProofFormat;
+use crate::proof::{CodeSample, ProofFormat};
 
 mod font;
 pub use font::{FontInfoArgs, SetFontArgs};
@@ -59,7 +59,7 @@ pub enum Command {
     /// Check font health without modifying it; exits 1 when errors are found.
     Check(CheckArgs),
 
-    /// Render text set in a font to a PNG or SVG proof image.
+    /// Render text or syntax-highlighted code set in a font to a PNG or SVG proof image.
     Proof(ProofArgs),
 
     /// Inspect or author font metadata and source metrics.
@@ -408,6 +408,7 @@ pub struct CheckArgs {
 }
 
 #[derive(Debug, Parser)]
+#[command(group(ArgGroup::new("code_input").multiple(false)))]
 pub struct ProofArgs {
     /// Path to a .shift, UFO, Designspace, Glyphs, TTF, or OTF font source.
     #[arg(value_hint = ValueHint::FilePath)]
@@ -418,10 +419,54 @@ pub struct ProofArgs {
     pub output: PathBuf,
 
     /// Line of text to set; repeat for more lines. Defaults to a proof set.
-    #[arg(long, value_name = "TEXT")]
+    #[arg(long, value_name = "TEXT", conflicts_with = "code_input")]
     pub text: Vec<String>,
 
-    /// Sizes in pixels per em; each line is set at every size. Defaults to 72.
+    /// Source file to set as syntax-highlighted code, or `-` for standard
+    /// input; one row per line, whitespace kept, never wrapped.
+    #[arg(long, value_name = "FILE|-", group = "code_input", value_hint = ValueHint::FilePath)]
+    pub code: Option<PathBuf>,
+
+    /// Set a built-in code sample that stresses code-font confusables.
+    #[arg(long, value_name = "LANG", value_enum, group = "code_input")]
+    pub code_sample: Option<CodeSample>,
+
+    /// Pre-colored lines as JSON, or `-` for standard input:
+    /// {"background":"#1e1e1e","foreground":"#d4d4d4","lines":[[{"text":"fn ","color":"#c678dd"},{"text":"main"}]]}
+    #[arg(long, value_name = "FILE|-", group = "code_input", value_hint = ValueHint::FilePath)]
+    pub spans: Option<PathBuf>,
+
+    /// Grammar for --code as a language name or file extension (rust, py, ts,
+    /// go, rb, sh, ...). Defaults to the file extension, then the first
+    /// line, then plain text; an unknown name lists every language.
+    #[arg(long, value_name = "NAME|EXT", requires = "code")]
+    pub lang: Option<String>,
+
+    /// Syntax theme for code colors, or for text background and ink:
+    /// base16-ocean.dark (default for code), base16-eighties.dark,
+    /// base16-mocha.dark, base16-ocean.light, InspiredGitHub,
+    /// "Solarized (dark)", "Solarized (light)".
+    #[arg(long, value_name = "NAME")]
+    pub theme: Option<String>,
+
+    /// Columns per tab stop in code and spans. Defaults to 4.
+    #[arg(long, value_name = "N", requires = "code_input", value_parser = clap::value_parser!(u8).range(1..=16))]
+    pub tab_width: Option<u8>,
+
+    /// Number code lines in a muted gutter.
+    #[arg(long, requires = "code_input")]
+    pub line_numbers: bool,
+
+    /// Page background as #rrggbb; overrides the theme and spans document.
+    #[arg(long, value_name = "HEX")]
+    pub background: Option<String>,
+
+    /// Default ink as #rrggbb; overrides the theme and spans document.
+    #[arg(long, value_name = "HEX")]
+    pub foreground: Option<String>,
+
+    /// Sizes in pixels per em; each text line is set at every size. Defaults
+    /// to 72 for text; code takes a single size and defaults to 20.
     #[arg(long, value_name = "PX", value_delimiter = ',')]
     pub sizes: Vec<f32>,
 
@@ -430,11 +475,12 @@ pub struct ProofArgs {
     pub location: Vec<String>,
 
     /// Draw ascender, cap-height, x-height, baseline, and descender guides
-    /// behind the largest-size rows.
+    /// behind the largest-size rows, or faintly behind the first code line.
     #[arg(long)]
     pub metrics: bool,
 
-    /// Fixed image width in pixels; lines wrap at spaces to fit.
+    /// Fixed image width in pixels; text wraps at spaces to fit, code is
+    /// clipped at the image edge.
     #[arg(long, value_name = "PX")]
     pub width: Option<u32>,
 

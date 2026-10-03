@@ -1,25 +1,40 @@
-//! Renders text set in a font to an image so a person or agent can look at it.
+//! Renders text or source code set in a font to an image so a person or
+//! agent can look at it.
 //!
-//! The font is compiled in memory, each proof line is shaped with HarfRust at
-//! a user-space location, and outlines are drawn black on white. Characters
-//! the font does not map are shaped to `.notdef`, drawn in red, and listed in
-//! the [`ProofReport`].
+//! The font is compiled in memory and each proof line is shaped whole with
+//! HarfRust at a user-space location. Plain text is drawn in one ink on one
+//! background (black on white by default) as a waterfall of sizes. Code is
+//! drawn like an editor at one size, each glyph colored by the syntax token
+//! or `--spans` piece that contains it. Characters the font does not map are
+//! shaped to `.notdef`, marked, and listed in the [`ProofReport`].
 
+mod code;
+mod code_layout;
 mod font;
 mod label;
 mod layout;
 mod raster;
+mod report;
 mod svg;
+mod theme;
 
 use std::path::Path;
 
 use clap::ValueEnum;
 use miette::{IntoDiagnostic, Result, WrapErr, bail};
 use serde::Serialize;
+use syntect::parsing::SyntaxSet;
 
 use crate::cli::ProofArgs;
-use font::{AxisValue, ProofFont, ProofMetrics, compile_font};
+use code::{ColoredLine, highlight, parse_spans, read_source, resolve_syntax};
+use code_layout::{CodeLayout, layout_code};
+use font::{ProofFont, compile_font};
 use layout::{Guide, layout};
+use report::{GuideReport, LineReport, ProofMode, RowReport, missing};
+use theme::{DEFAULT_THEME, MARKER, MISSING_FILL, MissingStyle, Palette, Rgb, SIZE_LABEL};
+
+pub use code::CodeSample;
+pub use report::ProofReport;
 
 /// Lines proofed when no `--text` is given: a spacing control string, the
 /// classic round/straight check, a pangram, and confusable figures.
@@ -29,10 +44,18 @@ const DEFAULT_TEXT: [&str; 4] = [
     "The quick brown fox jumps over the lazy dog",
     "0123456789 Il1| O0 {}[]()",
 ];
-/// Size used when `--sizes` is not given, in pixels per em.
+/// Text size used when `--sizes` is not given, in pixels per em.
 const DEFAULT_SIZE: f32 = 72.0;
+/// Code size used when `--sizes` is not given, in pixels per em.
+const DEFAULT_CODE_SIZE: f32 = 20.0;
+/// Columns per tab stop when `--tab-width` is not given.
+const DEFAULT_TAB_WIDTH: usize = 4;
 /// Largest accepted size, which keeps a single row within raster limits.
 const MAX_SIZE: f32 = 1000.0;
+/// How far line numbers fade from the foreground toward the background.
+const LINE_NUMBER_FADE: f32 = 0.55;
+/// Opacity of metric guides behind code, so they do not compete with tokens.
+const CODE_GUIDE_OPACITY: f32 = 0.35;
 
 /// Image encoding of a proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -53,73 +76,15 @@ impl ProofFormat {
     }
 }
 
-/// Describes a written proof image.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProofReport {
-    pub output: String,
-    pub format: ProofFormat,
-    /// Image width in pixels.
-    pub width: u32,
-    /// Image height in pixels.
-    pub height: u32,
-    /// Sizes in pixels per em, in the order each line was rendered.
-    pub sizes: Vec<f32>,
-    /// Every font axis at the user-space value used for shaping.
-    pub location: Vec<AxisValue>,
-    /// Font-unit metrics at that location.
-    pub metrics: ProofMetrics,
-    /// Guides drawn behind the largest-size rows; empty without `--metrics`.
-    pub guides: Vec<GuideReport>,
-    pub lines: Vec<LineReport>,
-    /// Rows drawn top to bottom: every line at every size, split further
-    /// when `--width` wraps it.
-    pub rows: Vec<RowReport>,
-    /// Unmapped characters across all lines, in order of first appearance.
-    pub missing_characters: Vec<MissingCharacter>,
-}
-
-/// One requested proof line.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LineReport {
-    pub text: String,
-    pub missing_characters: Vec<MissingCharacter>,
-}
-
-/// One drawn row of the proof image.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RowReport {
-    /// Index into [`ProofReport::lines`].
-    pub line: usize,
-    pub text: String,
-    /// Pixels per em.
-    pub size: f32,
-    /// Pen origin of the first glyph, in pixels from the left of the image.
-    pub x: f32,
-    /// Baseline, in pixels from the top of the image.
-    pub baseline: f32,
-    /// Advance width of the set text, in pixels.
-    pub width: f32,
-}
-
-/// A character the font's character map does not cover.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct MissingCharacter {
-    pub character: String,
-    /// Code point as `U+XXXX`.
-    pub unicode: String,
-}
-
-/// A metric guide and where it sits above the baseline.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GuideReport {
-    pub name: &'static str,
-    /// Hex RGB stroke color.
-    pub color: String,
-    pub font_units: f32,
+/// The lines to set and the colors they come with, before CLI overrides.
+struct Content {
+    mode: ProofMode,
+    lines: Vec<ColoredLine>,
+    language: Option<String>,
+    theme: Option<String>,
+    background: Rgb,
+    foreground: Rgb,
+    styles_ignored: bool,
 }
 
 /// Compiles the font at `args.path`, renders the proof, and writes it to
@@ -128,32 +93,56 @@ pub struct GuideReport {
 /// # Errors
 ///
 /// Returns a diagnostic when the font cannot be read, compiled, or proofed
-/// (for example because it maps no characters), when an argument is out of
-/// range, or when the image cannot be rendered or written.
+/// (for example because it maps no characters), when code, spans, a theme,
+/// a language, or a color cannot be read or resolved, when an argument is
+/// out of range, or when the image cannot be rendered or written.
 pub fn proof(args: &ProofArgs) -> Result<ProofReport> {
-    let lines: Vec<String> = if args.text.is_empty() {
-        DEFAULT_TEXT.iter().map(ToString::to_string).collect()
-    } else {
-        args.text.clone()
-    };
-    let sizes = if args.sizes.is_empty() {
-        vec![DEFAULT_SIZE]
-    } else {
-        args.sizes.clone()
-    };
-    if let Some(size) = sizes
-        .iter()
-        .find(|size| !size.is_finite() || **size <= 0.0 || **size > MAX_SIZE)
-    {
-        bail!("size {size} is out of range; sizes must be greater than 0 and at most {MAX_SIZE}");
-    }
+    let tab_width = args.tab_width.map_or(DEFAULT_TAB_WIDTH, usize::from);
+    let content = read_content(args, tab_width)?;
+    let sizes = sizes(args, content.mode)?;
     if args.width == Some(0) {
         bail!("--width must be greater than 0");
     }
+    let background = match &args.background {
+        Some(hex) => Rgb::parse(hex)?,
+        None => content.background,
+    };
+    let foreground = match &args.foreground {
+        Some(hex) => Rgb::parse(hex)?,
+        None => content.foreground,
+    };
 
     let data = compile_font(&args.path)?;
     let font = ProofFont::new(&data, &args.location)?;
-    let page = layout(&font, &lines, &sizes, args.width, args.metrics);
+    let page = match content.mode {
+        ProofMode::Text => {
+            let palette = Palette {
+                background,
+                foreground,
+                label: SIZE_LABEL,
+                missing: MissingStyle::Fill(MISSING_FILL),
+                guide_opacity: 1.0,
+            };
+            let lines: Vec<String> = content.lines.iter().map(|line| line.text.clone()).collect();
+            layout(&font, &lines, &sizes, args.width, args.metrics, palette)
+        }
+        ProofMode::Code | ProofMode::Spans => {
+            let palette = Palette {
+                background,
+                foreground,
+                label: foreground.mix(background, LINE_NUMBER_FADE),
+                missing: MissingStyle::Marker(MARKER),
+                guide_opacity: CODE_GUIDE_OPACITY,
+            };
+            let options = CodeLayout {
+                size: sizes[0],
+                width: args.width,
+                line_numbers: args.line_numbers,
+                guides: args.metrics,
+            };
+            layout_code(&font, &content.lines, &options, palette)
+        }
+    };
     let format = args
         .format
         .unwrap_or_else(|| ProofFormat::infer(&args.output));
@@ -166,12 +155,18 @@ pub fn proof(args: &ProofArgs) -> Result<ProofReport> {
         .wrap_err_with(|| format!("failed to write proof to {}", args.output.display()))?;
 
     let metrics = font.metrics();
-    let line_reports: Vec<LineReport> = lines
+    let line_reports: Vec<LineReport> = content
+        .lines
         .iter()
-        .map(|text| LineReport {
-            text: text.clone(),
-            missing_characters: missing(font.missing_characters(text)),
+        .map(|line| LineReport {
+            text: line.text.clone(),
+            missing_characters: missing(font.missing_characters(&line.text)),
         })
+        .collect();
+    let all_text: String = content
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
         .collect();
     let guides = if args.metrics {
         Guide::ALL
@@ -187,13 +182,23 @@ pub fn proof(args: &ProofArgs) -> Result<ProofReport> {
     } else {
         Vec::new()
     };
+    let code_mode = content.mode != ProofMode::Text;
 
     Ok(ProofReport {
         output: args.output.display().to_string(),
         format,
+        mode: content.mode,
         width: page.width,
         height: page.height,
         sizes,
+        language: content.language,
+        theme: content.theme,
+        background,
+        foreground,
+        line_count: content.lines.len(),
+        tab_width: code_mode.then_some(tab_width),
+        line_numbers: args.line_numbers,
+        styles_ignored: content.styles_ignored,
         location: font.location(),
         metrics,
         guides,
@@ -207,87 +212,100 @@ pub fn proof(args: &ProofArgs) -> Result<ProofReport> {
                 x: row.origin_x,
                 baseline: row.baseline,
                 width: row.run.advance * row.scale,
+                clipped: row.clipped,
             })
             .collect(),
-        missing_characters: missing(font.missing_characters(&lines.concat())),
+        missing_characters: missing(font.missing_characters(&all_text)),
         lines: line_reports,
     })
 }
 
-fn missing(characters: Vec<char>) -> Vec<MissingCharacter> {
-    characters
-        .into_iter()
-        .map(|character| MissingCharacter {
-            character: character.to_string(),
-            unicode: format!("U+{:04X}", u32::from(character)),
-        })
-        .collect()
+/// Validates `--sizes`; code is set at exactly one size.
+fn sizes(args: &ProofArgs, mode: ProofMode) -> Result<Vec<f32>> {
+    let sizes = match (args.sizes.is_empty(), mode) {
+        (true, ProofMode::Text) => vec![DEFAULT_SIZE],
+        (true, _) => vec![DEFAULT_CODE_SIZE],
+        (false, _) => args.sizes.clone(),
+    };
+    if let Some(size) = sizes
+        .iter()
+        .find(|size| !size.is_finite() || **size <= 0.0 || **size > MAX_SIZE)
+    {
+        bail!("size {size} is out of range; sizes must be greater than 0 and at most {MAX_SIZE}");
+    }
+    if mode != ProofMode::Text && sizes.len() > 1 {
+        bail!("code proofs are set at one size; pass a single --sizes value");
+    }
+    Ok(sizes)
 }
 
-impl ProofReport {
-    /// Formats the report as plain text lines for terminals.
-    pub fn render(&self) -> String {
-        let format = match self.format {
-            ProofFormat::Png => "png",
-            ProofFormat::Svg => "svg",
-        };
-        let sizes: Vec<String> = self.sizes.iter().map(|size| format!("{size}px")).collect();
-        let mut lines = vec![
-            format!("{}  {}x{} {format}", self.output, self.width, self.height),
-            format!(
-                "rows  {} ({} {} at {})",
-                self.rows.len(),
-                self.lines.len(),
-                if self.lines.len() == 1 {
-                    "line"
-                } else {
-                    "lines"
-                },
-                sizes.join(", ")
-            ),
-        ];
-        if !self.location.is_empty() {
-            let location: Vec<String> = self
-                .location
-                .iter()
-                .map(|axis| format!("{}={}", axis.tag, axis.value))
-                .collect();
-            lines.push(format!("location  {}", location.join(", ")));
-        }
-        for guide in &self.guides {
-            lines.push(format!(
-                "guide  {:<10} {}  {}",
-                guide.name, guide.color, guide.font_units
-            ));
-        }
-        if self.missing_characters.is_empty() {
-            lines.push("missing  none".to_string());
-        } else {
-            let missing: Vec<String> = self
-                .missing_characters
-                .iter()
-                .map(|missing| {
-                    format!(
-                        "{} {}",
-                        display_character(&missing.character),
-                        missing.unicode
-                    )
-                })
-                .collect();
-            lines.push(format!(
-                "missing  {} characters (drawn red): {}",
-                self.missing_characters.len(),
-                missing.join(", ")
-            ));
-        }
-        lines.join("\n")
-    }
-}
+fn read_content(args: &ProofArgs, tab_width: usize) -> Result<Content> {
+    let themes = theme::Themes::load();
+    let theme_name = args.theme.as_deref().unwrap_or(DEFAULT_THEME);
+    let theme = themes.get(theme_name)?;
+    let (theme_background, theme_foreground) = theme::theme_colors(theme);
 
-fn display_character(character: &str) -> String {
-    if character == " " {
-        "space".to_string()
-    } else {
-        character.to_string()
+    if let Some(spans) = &args.spans {
+        let (document, lines) = parse_spans(&read_source(spans)?, tab_width)?;
+        let background = document.background.as_deref().map(Rgb::parse).transpose()?;
+        let foreground = document.foreground.as_deref().map(Rgb::parse).transpose()?;
+        return Ok(Content {
+            mode: ProofMode::Spans,
+            lines,
+            language: None,
+            theme: (background.is_none() || foreground.is_none()).then(|| theme_name.to_string()),
+            background: background.unwrap_or(theme_background),
+            foreground: foreground.unwrap_or(theme_foreground),
+            styles_ignored: false,
+        });
     }
+
+    let (source, language, path) = match (&args.code, args.code_sample) {
+        (Some(path), _) => (read_source(path)?, args.lang.clone(), Some(path.as_path())),
+        (None, Some(sample)) => (
+            sample.source().to_string(),
+            Some(sample.language().to_string()),
+            None,
+        ),
+        (None, None) => {
+            let lines: Vec<ColoredLine> = if args.text.is_empty() {
+                DEFAULT_TEXT
+                    .iter()
+                    .map(|text| ColoredLine::plain(text))
+                    .collect()
+            } else {
+                args.text
+                    .iter()
+                    .map(|text| ColoredLine::plain(text))
+                    .collect()
+            };
+            let themed = args.theme.is_some();
+            return Ok(Content {
+                mode: ProofMode::Text,
+                lines,
+                language: None,
+                theme: args.theme.clone(),
+                background: if themed { theme_background } else { Rgb::WHITE },
+                foreground: if themed { theme_foreground } else { Rgb::BLACK },
+                styles_ignored: false,
+            });
+        }
+    };
+
+    let source_lines: Vec<&str> = source.lines().collect();
+    if source_lines.is_empty() {
+        bail!("the code is empty, so there is nothing to proof");
+    }
+    let syntaxes = SyntaxSet::load_defaults_newlines();
+    let syntax = resolve_syntax(&syntaxes, language.as_deref(), path, source_lines[0])?;
+    let highlighted = highlight(&syntaxes, syntax, theme, &source_lines, tab_width)?;
+    Ok(Content {
+        mode: ProofMode::Code,
+        lines: highlighted.lines,
+        language: Some(highlighted.language),
+        theme: Some(theme_name.to_string()),
+        background: theme_background,
+        foreground: theme_foreground,
+        styles_ignored: highlighted.styles_ignored,
+    })
 }

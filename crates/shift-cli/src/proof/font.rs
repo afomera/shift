@@ -76,6 +76,13 @@ pub struct PlacedGlyph {
     /// Whether shaping fell back to `.notdef`; renderers draw these in a
     /// warning color, and an inkless `.notdef` becomes a hollow box.
     pub missing: bool,
+    /// Byte offset in the shaped text of the first character this glyph
+    /// represents (its HarfRust cluster).
+    pub cluster: usize,
+    /// Pen position of the glyph, in font units from the run origin.
+    pub x: f32,
+    /// Horizontal advance, in font units, including placeholder widths.
+    pub advance: f32,
 }
 
 /// Shaped text in font units.
@@ -206,6 +213,13 @@ impl<'a> ProofFont<'a> {
             .collect()
     }
 
+    /// Whether the character map covers every character of `text`.
+    pub fn maps_all(&self, text: &str) -> bool {
+        let charmap = self.font.charmap();
+        text.chars()
+            .all(|character| charmap.map(character).is_some())
+    }
+
     /// Shapes `text` with HarfRust at the bound location.
     pub fn shape(&self, text: &str) -> ShapedRun {
         let Ok(font) = harfrust::FontRef::new(self.data) else {
@@ -240,7 +254,13 @@ impl<'a> ProofFont<'a> {
                 advance = advance.max(units_per_em * PLACEHOLDER_MIN_ADVANCE_EM);
                 segments = placeholder_box(x, advance, units_per_em);
             }
-            glyphs.push(PlacedGlyph { segments, missing });
+            glyphs.push(PlacedGlyph {
+                segments,
+                missing,
+                cluster: info.cluster as usize,
+                x: pen_x,
+                advance,
+            });
             pen_x += advance;
         }
 
@@ -311,13 +331,23 @@ fn parse_location(font: &FontRef, coordinates: &[String]) -> Result<Vec<(String,
     Ok(values)
 }
 
-/// Builds a hollow rectangle whose inner contour runs opposite the outer one,
-/// so a nonzero fill leaves the middle empty.
 fn placeholder_box(x: f32, advance: f32, units_per_em: f32) -> Vec<Segment> {
-    let stroke = units_per_em * PLACEHOLDER_STROKE_EM;
     let inset = advance * 0.1;
-    let (left, right) = (x + inset, x + advance - inset);
-    let (bottom, top) = (0.0, units_per_em * PLACEHOLDER_HEIGHT_EM);
+    hollow_box(
+        (x + inset, 0.0),
+        (x + advance - inset, units_per_em * PLACEHOLDER_HEIGHT_EM),
+        units_per_em * PLACEHOLDER_STROKE_EM,
+    )
+}
+
+/// Builds a hollow rectangle from `(left, bottom)` to `(right, top)` whose
+/// inner contour runs opposite the outer one, so a nonzero fill leaves the
+/// middle empty.
+pub fn hollow_box(
+    (left, bottom): (f32, f32),
+    (right, top): (f32, f32),
+    stroke: f32,
+) -> Vec<Segment> {
     vec![
         Segment::Move(left, bottom),
         Segment::Line(right, bottom),

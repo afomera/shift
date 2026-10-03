@@ -4,8 +4,9 @@
 //! pointing down. Each row keeps its run in font units plus the scale and
 //! baseline needed to place it.
 
-use super::font::{ProofFont, ProofMetrics, ShapedRun};
+use super::font::{PlacedGlyph, ProofFont, ProofMetrics, ShapedRun};
 use super::label::LABEL_ADVANCE;
+use super::theme::{Palette, Rgb};
 
 /// Space around the content, in pixels.
 pub const MARGIN: f32 = 24.0;
@@ -14,7 +15,7 @@ const LABEL_GAP: f32 = 16.0;
 /// Extra space between rows, as a fraction of the row's size.
 const ROW_GAP_EM: f32 = 0.25;
 /// Narrowest page, so tiny proofs still have room for their labels.
-const MIN_WIDTH: f32 = 160.0;
+pub const MIN_WIDTH: f32 = 160.0;
 
 /// One rendered row: a whole proof line, or one wrapped part of it.
 pub struct Row {
@@ -30,8 +31,48 @@ pub struct Row {
     /// Baseline, in pixels from the top.
     pub baseline: f32,
     pub run: ShapedRun,
+    /// Fill for each glyph in `run`, in the same order.
+    pub colors: Vec<Rgb>,
     /// Whether this row gets metric guides.
     pub guided: bool,
+    /// Size label or line number drawn left of the text.
+    pub label: Option<Label>,
+    /// Whether the text runs past the right padding of a fixed-width page.
+    pub clipped: bool,
+}
+
+impl Row {
+    /// Splits a row into consecutive glyphs that share a fill, drawing missing
+    /// glyphs in `missing` regardless of their token color.
+    pub fn color_runs(&self, missing: Rgb) -> Vec<(&[PlacedGlyph], Rgb)> {
+        let fill = |index: usize| {
+            if self.run.glyphs[index].missing {
+                missing
+            } else {
+                self.colors[index]
+            }
+        };
+        let mut runs = Vec::new();
+        let mut start = 0;
+        for index in 1..=self.run.glyphs.len() {
+            let boundary = index == self.run.glyphs.len()
+                || fill(index) != fill(start)
+                || self.run.glyphs[index].missing != self.run.glyphs[start].missing;
+            if boundary {
+                runs.push((&self.run.glyphs[start..index], fill(start)));
+                start = index;
+            }
+        }
+        runs
+    }
+}
+
+/// Text drawn in the left column of a row, in the palette's label color.
+pub enum Label {
+    /// Digits from the built-in bitmap face, left edge at `x` pixels.
+    Bitmap { text: String, x: f32 },
+    /// Glyphs from the proofed font, pen origin at `x` pixels.
+    Font { run: ShapedRun, x: f32 },
 }
 
 /// A horizontal metric reference line.
@@ -106,6 +147,7 @@ pub struct Page {
     pub height: u32,
     pub rows: Vec<Row>,
     pub guides: Vec<GuideLine>,
+    pub palette: Palette,
 }
 
 /// Lays out every line at every size, line-major, wrapping at word
@@ -116,6 +158,7 @@ pub fn layout(
     sizes: &[f32],
     width: Option<u32>,
     with_guides: bool,
+    palette: Palette,
 ) -> Page {
     let metrics = font.metrics();
     let units_per_em = f32::from(metrics.units_per_em);
@@ -144,8 +187,14 @@ pub fn layout(
                     scale,
                     origin_x,
                     baseline,
+                    colors: vec![palette.foreground; run.glyphs.len()],
                     run,
                     guided,
+                    label: Some(Label::Bitmap {
+                        text: size_label(*size),
+                        x: MARGIN,
+                    }),
+                    clipped: false,
                 });
             }
         }
@@ -160,28 +209,32 @@ pub fn layout(
     });
     let page_height = (cursor - ROW_GAP_EM * sizes.last().copied().unwrap_or(0.0) + MARGIN).ceil();
 
-    let guides = rows
-        .iter()
+    Page {
+        width: page_width as u32,
+        height: page_height as u32,
+        guides: guide_lines(&rows, &metrics, page_width - MARGIN),
+        rows,
+        palette,
+    }
+}
+
+/// Places every guide the font defines behind each guided row, from the
+/// row's pen origin to `right` pixels.
+pub fn guide_lines(rows: &[Row], metrics: &ProofMetrics, right: f32) -> Vec<GuideLine> {
+    rows.iter()
         .filter(|row| row.guided)
         .flat_map(|row| {
             Guide::ALL.into_iter().filter_map(|guide| {
-                let height = guide.position(&metrics)?;
+                let height = guide.position(metrics)?;
                 Some(GuideLine {
                     guide,
                     y: row.baseline - height * row.scale,
                     x0: row.origin_x,
-                    x1: page_width - MARGIN,
+                    x1: right,
                 })
             })
         })
-        .collect();
-
-    Page {
-        width: page_width as u32,
-        height: page_height as u32,
-        rows,
-        guides,
-    }
+        .collect()
 }
 
 /// Formats a size for its row label, without a fractional part when whole.
