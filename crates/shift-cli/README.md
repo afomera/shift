@@ -46,6 +46,8 @@ cargo run -p shift-cli -- glyph inspect path/to/Family.glyphs Aacute
 cargo run -p shift-cli -- glyph inspect path/to/Family.designspace Aacute \
   --location wght=700 --view variation --json
 cargo run -p shift-cli -- compile path/to/Family.shift --output path/to/Family.ttf
+cargo run -p shift-cli -- compile path/to/Family.shift --output Family-Bold.ttf --instance Bold
+cargo run -p shift-cli -- compile path/to/Family.shift --all-instances --output-dir build/
 cargo run -p shift-cli -- check path/to/Family.shift
 cargo run -p shift-cli -- check path/to/Mono.shift --mono --width 600 --charset latin1 --json
 cargo run -p shift-cli -- proof path/to/Family.shift --output proof.png --metrics
@@ -461,6 +463,28 @@ Every mutation supports:
 - `--output Variant.shift` to leave the input untouched and write an independent document.
 
 In-place changes retain `DocumentId`. `--output` refuses to overwrite an existing destination and mints a new `DocumentId`. All mutations use a temporary sparse recovery overlay; canonical bytes change only after the complete semantic change succeeds.
+
+## Compiling
+
+```sh
+shift compile Lab.shift --output Lab.ttf
+shift compile Lab.shift --output Lab-wght700.ttf --location wght=700
+shift compile Lab.shift --output Lab-Bold.ttf --instance Bold
+shift compile Lab.shift --all-instances --output-dir build/
+```
+
+Without a target, `compile` writes the document as authored: with axes, a variable TrueType font whose `fvar` lists every named instance at its user-space coordinates with its style and PostScript names. `STAT` names the design axes; it carries axis values only for authored axis labels, never for instances. With a `wght` axis, `OS/2.usWeightClass` is the axis default.
+
+`--location` and `--instance` write one static font; `--all-instances` writes one per named instance to `--output-dir` as `<Family>-<Style>.ttf`, where both names keep only PostScript-safe characters (spaces dropped) and an authored PostScript name replaces the whole stem. Every output path is printed on its own line. All static fonts are built before any file is written.
+
+A static font is an in-memory single-master copy of the document; the document is never modified:
+
+- **Outlines.** Each glyph is resolved at the location's design coordinates (user space mapped once through axis mappings) with the same projections `glyph inspect --view resolved` uses: exact master drawings where the location lands on a master, compatible interpolation between masters. Components stay components and their base glyphs are resolved at the same location, so compiled outlines equal the flattened `--view resolved` points (cubic curves become TrueType quadratics as usual).
+- **Compatibility.** Between masters, a glyph whose master layers cannot interpolate would silently lose those layers, so the compile fails and names every glyph, source, and structural difference with `check`'s `incompatible-masters` wording. Exactly at a master, each glyph uses that master's drawing and incompatible layers are allowed.
+- **Metrics.** Ascender, descender, x-height, cap height, and their overshoots interpolate with the same source weights; line gap, italic angle, and underline values interpolate when every master authors them and otherwise keep the default master's value. Kerning, features, and font-level data are kept as authored.
+- **Dropped.** Axes, mappings, other sources, and named instances, so the font has no `fvar`, `gvar`, `avar`, `HVAR`, or `STAT`.
+- **Naming.** The style name is the instance name, or for `--location` the coordinates as `wght700` (several axes separated by spaces). Name IDs 16/17 hold the family and style; name IDs 1/2 follow fontmake's RIBBI rule: `Regular`, `Bold`, `Italic`, and `Bold Italic` stay in ID 2 (and IDs 16/17 are omitted because they would repeat 1/2), while any other style moves into the family, so `SemiBold` becomes ID 1 `Atlas Mono SemiBold`, ID 2 `Regular`. Name ID 6 is the instance's PostScript name, or `<Family>-<Style>` without spaces. `OS/2.fsSelection` and `head.macStyle` carry the matching Regular/Bold/Italic bits.
+- **Weight class.** `OS/2.usWeightClass` is the `wght` coordinate, rounded and clamped to 1–1000. Fonts without a `wght` axis keep any `openTypeOS2WeightClass` imported from UFO font info, else 400.
 
 ## Install
 

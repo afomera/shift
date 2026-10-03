@@ -22,7 +22,7 @@ B=target/release/shift-cli
 
 | Need                         | Command                                                                                                                                                                |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New font                     | `$B font create Dream.shift --units-per-em 1000` (UPM is fixed after creation)                                                                                         |
+| New font                     | `$B font create Dream.shift` (1000 UPM; `--from Other.glyphs` copies another font's metrics, axes, and masters)                                                        |
 | Name + metrics               | `$B font set Dream.shift --family-name "Dream Sans" --style-name Regular --version 0.001 --ascender 800 --descender -200 --x-height 520 --cap-height 700 --line-gap 0` |
 | Read them back               | `$B font info Dream.shift --json`                                                                                                                                      |
 | Write many glyphs atomically | `$B glyph set Dream.shift --input glyphs.json`                                                                                                                         |
@@ -35,7 +35,12 @@ B=target/release/shift-cli
 | Dark-mode text proof         | `$B proof Dream.shift -o dark.png --text "..." --background "#1e1e1e" --foreground "#d4d4d4"`                                                                          |
 | Health                       | `$B check Dream.shift [--mono --width 600] [--charset ascii\|latin1]` (exit 0 ok, 1 errors, 2 could not run)                                                           |
 | Inspect one glyph            | `$B glyph inspect Dream.shift n --view structure`                                                                                                                      |
-| Ship                         | `$B compile Dream.shift --output Dream.ttf`                                                                                                                            |
+| Weight axis + bold master    | `$B axis add Dream.shift --tag wght --name Weight --min 100 --default 400 --max 900` then `$B source add Dream.shift --name Black --location wght=900`                 |
+| Change an axis range         | `$B axis set Dream.shift wght --max 1000` (refuses to strand masters or instances; never moves the default master)                                                     |
+| Named instances              | `$B instance add Dream.shift --standard-weights` or `--name SemiBold --location wght=600`; `instance set`/`instance remove` by name                                    |
+| List instances               | `$B inspect Dream.shift --view instances` (or `--json`, `namedInstances`)                                                                                              |
+| Ship (variable)              | `$B compile Dream.shift --output Dream.ttf`                                                                                                                            |
+| Ship (static)                | `$B compile Dream.shift --all-instances --output-dir build/` or `-o Dream-Bold.ttf --instance Bold` / `--location wght=700`                                            |
 
 Every mutation accepts `--dry-run`, `--json`, and `--output Variant.shift` (writes a copy, leaves the input alone — use it to try alternatives side by side). Full details: `crates/shift-cli/README.md`.
 
@@ -83,7 +88,16 @@ Hard rules — get these wrong and the font is broken:
    - figures `zero`–`nine`, then punctuation and symbols. For code fonts prioritize `{}[]()<>=!;:_-+*/\|&@#$%^~` and make `0 O o`, `1 l I |` and `` ` ' " `` unmistakable.
      Write a family per `glyph set` batch, then proof with spacing strings like `nnXnn ooXoo HHXHH OOXOO` substituting each new letter for `X`.
 7. **Check.** Run `check` after every batch; mono fonts use `--mono --width <cell>`. Expect `charset-missing-*` errors until the set is complete; every other error must be fixed before moving on. Then `--charset ascii` (later `latin1`) as the completion gate.
-8. **Compile** to TTF when the user wants to try it in real apps.
+8. **Compile** to TTF when the user wants to try it in real apps. For a family, ship the variable font and static instances (see below).
+
+## Variable fonts & instances
+
+For a variable font (usually a `wght` axis), each extreme of the axis is a separate master you draw:
+
+1. **Masters at the axis extremes.** `axis add --tag wght --min 100 --default 400 --max 900`, keep the default source (`Regular`) at the default, and `source add --name Black --location wght=900` (plus `Thin` at 100 if the range goes below the default). The font draws nothing past its outermost master: a 900 Black master on a 100..1000 axis makes 1000 look like 900. Widen the range later with `axis set wght --max 1000`, then add a master there.
+2. **Compatible masters.** Draw every glyph in every master with the same contours in the same order, the same point count, the same start point and direction, and the same segment kinds — only coordinates and advances differ. Write both masters in one `glyph set` batch using the `"source"` field (`{"name":"n","source":"Black","layer":{...}}`), or `layer copy --from-source Regular --source Black` and then move points with `layer set`. `check` reports `incompatible-masters` with the exact path/node difference; fix those before shipping. Proof the middle with `proof --location wght=600`.
+3. **Instances.** `instance add --standard-weights` adds Thin 100 … Black 900 for every weight inside the range; add others with `instance add --name Book --location wght=350`. They become the font-menu styles of the variable font.
+4. **Ship both.** `compile -o Dream.ttf` for the variable font, and `compile --all-instances --output-dir build/` for static `Dream-Bold.ttf`-style files, which some editors and terminals handle better. Between masters, a static compile refuses glyphs whose masters cannot interpolate and names them.
 
 ## Monospace specifics
 

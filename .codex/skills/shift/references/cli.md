@@ -57,10 +57,24 @@ shift-cli kerning group create Lab.shift O O Q --position first
 - **Kerning sides**: `first` is the left glyph, and its first-position group kerns its right edge; `second` is the right glyph. A side is a glyph name or `@GROUP` for a group at that position. Values are per master and default to the default source; set every master you mean to change.
 - **`kerning set --input`** applies `groups` (created if missing; `members` replaces membership) and then `pairs` (`value: null` removes) atomically, so pairs can name groups the batch creates.
 
+## Check and proof
+
+```sh
+shift-cli check Family.shift                                   # exit 0 ok, 1 errors, 2 could not run
+shift-cli check Mono.shift --mono --width 600 --charset latin1 --json
+shift-cli proof Family.shift --output proof.png --text "HOHOnono" --sizes 24,96 --metrics
+shift-cli proof Mono.shift --output code.png --code-sample rust --line-numbers
+```
+
+- `check` is a read-only health report for any source `glyph inspect` reads: open, degenerate, or empty contours, contour direction, incompatible masters, advances, `--mono` cell widths, and `--charset` coverage. Run it after every authoring batch; warnings and info never fail it.
+- `proof` renders text, or syntax-highlighted code with `--code FILE`, `--code-sample LANG`, or `--spans FILE`, to PNG or SVG. Look at the image before judging a design; characters the font does not map are drawn in red and listed in the output.
+
 ## Compile
 
 ```sh
 shift-cli compile Family.shift --output Family.ttf
+shift-cli compile Family.shift --output Family-Bold.ttf --instance Bold        # or --location wght=700
+shift-cli compile Family.shift --all-instances --output-dir build/
 ```
 
-Compile after authoring to confirm the font builds. A compile error usually names the glyph and source; incompatible masters are the most common cause in variable fonts (see [variable-fonts.md](variable-fonts.md)).
+Without a target the font compiles as authored (variable when it has axes). `--instance`, `--location`, and `--all-instances` write static fonts resolved at those locations. Compile after authoring to confirm the font builds. A compile error usually names the glyph and source; incompatible masters are the most common cause in variable fonts (see [variable-fonts.md](variable-fonts.md)).
