@@ -155,6 +155,9 @@ const FONTC_VERSION_MARKER: &str = ";fontc ";
 fn compile_ttf(source: ShiftIrSource) -> Result<Vec<u8>, ExportError> {
     let bytes = fontc::generate_font(Box::new(source), fontc::Options::default())
         .map_err(|error| compile_error(&error))?;
+    let bytes = crate::overlap::flag_overlaps(&bytes).map_err(|message| {
+        compile_error(&format!("could not flag overlapping contours: {message}"))
+    })?;
     strip_compiler_version(&bytes)
 }
 
@@ -235,6 +238,64 @@ mod tests {
     use skrifa::raw::TableProvider;
     use skrifa::string::StringId;
     use skrifa::{FontRef, MetadataProvider};
+
+    #[test]
+    fn compiled_glyphs_are_flagged_as_overlapping_and_still_vary() {
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::outline::{DrawSettings, OutlinePen};
+        use skrifa::raw::tables::glyf::Glyph;
+
+        #[derive(Default)]
+        struct Count(usize);
+        impl OutlinePen for Count {
+            fn move_to(&mut self, _: f32, _: f32) {
+                self.0 += 1
+            }
+            fn line_to(&mut self, _: f32, _: f32) {
+                self.0 += 1
+            }
+            fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {
+                self.0 += 1
+            }
+            fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {
+                self.0 += 1
+            }
+            fn close(&mut self) {}
+        }
+
+        let bytes = FontExporter::new()
+            .compile_ttf(&sample_variable_font())
+            .unwrap();
+        let font = FontRef::new(&bytes).unwrap();
+        let (glyf, loca) = (font.glyf().unwrap(), font.loca(None).unwrap());
+        let mut simple = 0;
+        for gid in 0..font.maxp().unwrap().num_glyphs() {
+            if let Some(Glyph::Simple(glyph)) = loca.get_glyf(gid.into(), &glyf).unwrap() {
+                assert!(
+                    glyph.has_overlapping_contours(),
+                    "glyph {gid} is not flagged"
+                );
+                simple += 1;
+            }
+        }
+        assert!(simple > 0);
+
+        // gvar still lines up with the rewritten glyf: every outline draws at
+        // the default and at a varied location.
+        let heavy = font.axes().location([("wght", 900.0)]);
+        let outlines = font.outline_glyphs();
+        for (_, gid) in font.charmap().mappings() {
+            let glyph = outlines.get(gid).unwrap();
+            for location in [LocationRef::default(), (&heavy).into()] {
+                glyph
+                    .draw(
+                        DrawSettings::unhinted(Size::unscaled(), location),
+                        &mut Count::default(),
+                    )
+                    .unwrap();
+            }
+        }
+    }
 
     #[test]
     fn compiles_ttf_with_authored_cmap() {
