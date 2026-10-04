@@ -43,10 +43,14 @@ impl GlyphRole {
 
         let mark = any(is_mark) || (categories.is_empty() && has_comb_name(glyph.name()));
         let null_name = matches!(glyph.name(), ".null" | "NULL");
+        let blank_symbol = !codepoints.is_empty()
+            && codepoints
+                .iter()
+                .all(|codepoint| is_blank_symbol(*codepoint));
 
         Self {
             mark,
-            space_like: all(is_space_like) || null_name,
+            space_like: all(is_space_like) || null_name || blank_symbol,
             zero_width_allowed: mark || all(is_zero_width_control) || null_name,
         }
     }
@@ -68,6 +72,13 @@ fn is_space_like(category: GeneralCategory) -> bool {
             | GeneralCategory::Control
             | GeneralCategory::Format
     )
+}
+
+/// Code points outside the separator categories whose standard glyph is
+/// blank: U+2800 BRAILLE PATTERN BLANK (a symbol, `So`, with no dots) and the
+/// Hangul fillers. Fonts draw them empty on purpose.
+fn is_blank_symbol(codepoint: u32) -> bool {
+    matches!(codepoint, 0x2800 | 0x115F | 0x1160 | 0x3164 | 0xFFA0)
 }
 
 fn is_zero_width_control(category: GeneralCategory) -> bool {
@@ -122,5 +133,15 @@ mod tests {
         assert!(zwj.space_like);
         assert!(zwj.zero_width_allowed);
         assert!(role(".null", &[]).zero_width_allowed);
+    }
+
+    #[test]
+    fn blank_braille_pattern_expects_an_empty_outline_but_keeps_its_advance() {
+        let blank = role("uni2800", &[0x2800]);
+        let dots = role("uni2801", &[0x2801]);
+
+        assert!(blank.space_like);
+        assert!(!blank.zero_width_allowed);
+        assert!(!dots.space_like);
     }
 }
