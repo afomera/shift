@@ -159,7 +159,7 @@ fn contours_from_svg_path(svg_path: &str) -> Result<Vec<Contour>> {
                 contour.add_point(x1, y1, PointType::OffCurve, false);
                 contour.add_point(x, y, PointType::QCurve, false);
             }
-            SimplePathSegment::ClosePath => contour.close(),
+            SimplePathSegment::ClosePath => close_svg_contour(contour),
             SimplePathSegment::MoveTo { .. } => unreachable!("move starts a new contour"),
         }
     }
@@ -171,4 +171,31 @@ fn contours_from_svg_path(svg_path: &str) -> Result<Vec<Contour>> {
     }
 
     Ok(contours)
+}
+
+/// Distance below which a closed subpath's final point duplicates its start.
+const CLOSING_POINT_TOLERANCE: f64 = 1e-6;
+
+/// Closes an SVG subpath, merging a final point that returns to the start.
+///
+/// SVG closes a shape by drawing back to its first point and then `Z`, but a
+/// closed contour already ends where it starts, so keeping that point would
+/// leave a zero-length segment. The start takes the final point's type, so a
+/// closing curve still ends on it.
+fn close_svg_contour(contour: &mut Contour) {
+    contour.close();
+    let points = contour.points_mut();
+    if points.len() < 2 {
+        return;
+    }
+    let (first, last) = (&points[0], &points[points.len() - 1]);
+    let coincident = (first.x() - last.x()).abs() <= CLOSING_POINT_TOLERANCE
+        && (first.y() - last.y()).abs() <= CLOSING_POINT_TOLERANCE;
+    if !coincident {
+        return;
+    }
+    let Some(last) = points.pop() else {
+        return;
+    };
+    points[0].set_point_type(last.point_type());
 }

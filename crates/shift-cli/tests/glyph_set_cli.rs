@@ -153,6 +153,62 @@ fn svg_relative_shorthand_quadratic_and_post_close_commands_preserve_geometry() 
 }
 
 #[test]
+fn svg_path_returning_to_its_start_closes_without_a_duplicate_point() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("Lab.shift");
+    drop(ShiftStore::create_document(&path, &sample_font()).unwrap());
+    let output = shift_with_stdin(
+        &[
+            "layer",
+            "set",
+            path.to_str().unwrap(),
+            "--glyph",
+            "A",
+            "--source",
+            "Regular",
+            "--input",
+            "-",
+        ],
+        r#"{"advance":600,"svgPath":"M0 0 L100 0 L100 100 L0 0 Z M200 0 C250 -50 300 0 300 50 C300 100 250 100 200 0 Z"}"#,
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let font = load_font(path.to_str().unwrap());
+    let layer = font
+        .glyph_by_name("A")
+        .unwrap()
+        .layer_for_source(font.default_source_id().unwrap())
+        .unwrap();
+    let contours = layer.contours_iter().collect::<Vec<_>>();
+    let shape = |index: usize| {
+        contours[index]
+            .points()
+            .iter()
+            .map(|point| (point.x(), point.y(), point.point_type()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shape(0),
+        [
+            (0.0, 0.0, PointType::OnCurve),
+            (100.0, 0.0, PointType::OnCurve),
+            (100.0, 100.0, PointType::OnCurve),
+        ]
+    );
+    assert_eq!(
+        shape(1),
+        [
+            (200.0, 0.0, PointType::OnCurve),
+            (250.0, -50.0, PointType::OffCurve),
+            (300.0, 0.0, PointType::OffCurve),
+            (300.0, 50.0, PointType::OnCurve),
+            (300.0, 100.0, PointType::OffCurve),
+            (250.0, 100.0, PointType::OffCurve),
+        ]
+    );
+    assert!(contours.iter().all(|contour| contour.is_closed()));
+}
+
+#[test]
 fn invalid_svg_or_mixed_outline_formats_never_replace_the_layer() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("Lab.shift");
